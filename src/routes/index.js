@@ -1,18 +1,20 @@
-import { Router } from 'express';
-const router = Router();
+import { Router } from "express";
+const routes = Router();
 
-import registrationRoutes from './signup.js';
-import authRoutes from './auth.js';
-import eventRegistrationRoutes from './eventRegistration.js';
-import eventRoutes from './event.js';
-import attendanceRoutes from './attendance.js';
-import refreshTokenRoute from './refreshToken.js';
+import authRoutes from "./auth.js";
+import eventRoutes from "./event.js";
+import attendanceRoutes from "./attendance.js";
+import refreshTokenRoute from "./refreshToken.js";
+import usersRoutes from "./users.js";
+import adminDashboardRoutes from "./dashboard/adminDashboard.js";
+import faceScanRoutes from "./facescan.js";
 
-router.use('/register', registrationRoutes);
-router.use('/auth', authRoutes);
-router.use('/event/registration', eventRegistrationRoutes);
-router.use('/event', eventRoutes);
-router.use('/attendance', attendanceRoutes);
-router.use('/', refreshTokenRoute);
+routes.use("/auth", authRoutes);
+routes.use("/event", eventRoutes);
+routes.use("/attendance", attendanceRoutes);
+routes.use("/refreshToken", refreshTokenRoute);
+routes.use("/users", usersRoutes);
+routes.use("/dashboard", adminDashboardRoutes);
+routes.use("/facescan", faceScanRoutes);
 
-export default router;
+export default routes;

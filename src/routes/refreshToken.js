@@ -1,8 +1,8 @@
-import { Router } from 'express';
+import { Router } from "express";
 const router = Router();
 
-import refreshToken from '../authentication/refreshJwtToken.js';
+import { refreshToken } from "../controllers/index.js";
 
-router.post('/refreshToken', refreshToken);
+router.post("/", refreshToken);
 
 export default router;

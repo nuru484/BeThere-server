@@ -1,48 +1,66 @@
-import registerUser from './signup.js';
-import { user, login } from './auth.js';
+import { login, signup } from "./auth.js";
 import {
-  registerForEvent,
-  deleteEventRegistration,
-  getAllRegistrations,
-  getRegistrationsByEvent,
-  getRegistrationsByUser,
-  checkRegistrationStatus,
-} from './eventRegistration.js';
+  createAttendance,
+  updateAttendance,
+  getUserAttendance,
+  getEventAttendance,
+  getUserEventAttendance,
+} from "./attendance.js";
 import {
   createEvent,
   updateEvent,
   deleteEvent,
+  deleteAllEvents,
   getEventById,
   getAllEvents,
-} from './event.js';
+} from "./event.js";
 import {
-  createAttendance,
-  updateAttendance,
-  getAllAttendance,
-  getUserAttendance,
-  getEventAttendance,
-  deleteAttendance,
-} from './attendance.js';
+  getAllUsers,
+  createUserIdentification,
+  deleteUser,
+  updateUser,
+  getAllUserIdentifications,
+  updateUserRole,
+} from "./users.js";
+import { refreshToken } from "./refreshJwtToken.js";
+
+import {
+  getTotalUsersCount,
+  getTotalEventsCount,
+  getUpcomingEventsCount,
+  getAttendanceRecordsToday,
+  getRecentActivityFeed,
+} from "./dashboard/adminDashboard.js";
+
+import { addFaceScan, getFaceScan, deleteFaceScan } from "./facescan.js";
 
 export {
-  registerUser,
-  user,
+  signup,
   login,
-  registerForEvent,
-  deleteEventRegistration,
-  getAllRegistrations,
-  getRegistrationsByEvent,
-  getRegistrationsByUser,
-  checkRegistrationStatus,
   createEvent,
   updateEvent,
   deleteEvent,
+  deleteAllEvents,
   getEventById,
   getAllEvents,
   createAttendance,
   updateAttendance,
-  getAllAttendance,
+  getUserEventAttendance,
   getUserAttendance,
   getEventAttendance,
-  deleteAttendance,
+  getAllUsers,
+  createUserIdentification,
+  deleteUser,
+  updateUser,
+  getAllUserIdentifications,
+  updateUserRole,
+  refreshToken,
+  getTotalUsersCount,
+  getTotalEventsCount,
+  getUpcomingEventsCount,
+  getAttendanceRecordsToday,
+  getRecentActivityFeed,
+  addFaceScan,
+  getFaceScan,
+  deleteFaceScan,
 };

@@ -1,11 +1,9 @@
-import { Router } from 'express';
+import { Router } from "express";
 const router = Router();
 
-import { user, login } from '../controllers/index.js';
-import validateUserLogin from '../validation/auth.js';
-import authenticateJWT from '../authentication/jwtAuthentication.js';
+import { login, signup } from "../controllers/index.js";
 
-router.get('/user', authenticateJWT, user);
-router.post('/login', validateUserLogin, login);
+router.post("/login", login);
+router.post("/signup", signup);
 
 export default router;

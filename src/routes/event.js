@@ -1,54 +1,40 @@
-import { Router } from 'express';
+import { Router } from "express";
 const router = Router();
-
-import {
-  validateEventDetails,
-  validateEventUpdateDetails,
-} from '../validation/event.js';
 import {
   createEvent,
   updateEvent,
   deleteEvent,
+  deleteAllEvents,
   getEventById,
   getAllEvents,
-} from '../controllers/index.js';
-import authorizeRole from '../utils/middleware/authorizeRole.js';
-import authenticateJWT from '../authentication/jwtAuthentication.js';
+} from "../controllers/index.js";
+import { authorizeRole } from "../middleware/authorizeRole.js";
+import { authenticateJWT } from "../middleware/jwtAuthentication.js";
 
-router.post(
-  '/',
-  validateEventDetails,
-  authenticateJWT,
-  authorizeRole(['ADMIN']),
-  createEvent
-);
+router.post("/", authenticateJWT, authorizeRole(["ADMIN"]), createEvent);
 
-router.put(
-  '/:eventId',
-  validateEventUpdateDetails,
-  authenticateJWT,
-  authorizeRole(['ADMIN']),
-  updateEvent
-);
+router.put("/:eventId", authenticateJWT, authorizeRole(["ADMIN"]), updateEvent);
 
 router.delete(
-  '/:eventId',
+  "/:eventId",
   authenticateJWT,
-  authorizeRole(['ADMIN']),
+  authorizeRole(["ADMIN"]),
   deleteEvent
 );
 
+router.delete("/", authenticateJWT, authorizeRole(["ADMIN"]), deleteAllEvents);
+
 router.get(
-  '/:eventId',
+  "/:eventId",
   authenticateJWT,
-  authorizeRole(['ADMIN', 'STUDENT']),
+  authorizeRole(["ADMIN", "USER"]),
   getEventById
 );
 
 router.get(
-  '/',
+  "/",
   authenticateJWT,
-  authorizeRole(['ADMIN', 'STUDENT']),
+  authorizeRole(["ADMIN", "USER"]),
   getAllEvents
 );
 
