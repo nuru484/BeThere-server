@@ -30,7 +30,7 @@ model User {
   email          String  @unique
   profilePicture String? @db.VarChar(255)
   phoneNumber    String? @unique
-  faceScan       String?
+  faceScan       Json?
   role           role    @default(USER)
 
   createdAt DateTime @default(now())
