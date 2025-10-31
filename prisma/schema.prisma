@@ -52,7 +52,7 @@ model Event {
   locationId     Int
   type           String
   isRecurring    Boolean   @default(false)
-  recurrenceRule String? // e.g., "DAILY", "WEEKLY", or "MWF"
+  recurrenceRule String? 
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   sessions       Session[]

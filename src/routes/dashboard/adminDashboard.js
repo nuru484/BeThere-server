@@ -13,6 +13,6 @@ router.get("/users", getTotalUsersCount);
 router.get("/events/total", getTotalEventsCount);
 router.get("/events/upcoming", getUpcomingEventsCount);
 router.get("/attendance/today", getAttendanceRecordsToday);
-router.get("/activity/recent", getRecentActivityFeed); // last 5 events and last 5 attendance logs
+router.get("/activity/recent", getRecentActivityFeed);
 
 export default router;

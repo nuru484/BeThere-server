@@ -4,7 +4,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "dev": "node --watch server",
+    "dev": "node --watch --env-file .env server",
     "migrate": "npx prisma migrate dev --name init",
     "start": "node server.js"
   },

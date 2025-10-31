@@ -2,14 +2,13 @@ export class CustomError extends Error {
   constructor(message, status, layer = "unknown") {
     super(message);
     this.status = status;
-    this.layer = layer; // Track which layer the error occurred in
+    this.layer = layer; 
   }
 }
 
 export const errorHandler = (error, req, res, next) => {
   const isProduction = process.env.NODE_ENV === "production";
 
-  // Log the error here, centralized logging
   console.error({
     message: error.message,
     error,
