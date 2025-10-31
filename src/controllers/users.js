@@ -1,4 +1,4 @@
-import prisma from "../config/prismaClient.js";
+import prisma from "../config/prisma-client.js";
 import { CustomError } from "../middleware/error-handler.js";
 
 export const getAllUsers = async (req, res, next) => {

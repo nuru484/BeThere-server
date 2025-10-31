@@ -1,4 +1,4 @@
-import prisma from "../config/prismaClient.js";
+import prisma from "../config/prisma-client.js";
 
 export const addFaceScan = async (req, res, next) => {
   try {

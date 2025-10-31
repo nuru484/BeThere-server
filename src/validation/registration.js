@@ -16,7 +16,6 @@ const userRegistrationValidators = [
     .trim()
     .escape(),
 
-  // Username validation
   body("username")
     .exists({ checkFalsy: true })
     .withMessage("You must type a username")
@@ -38,7 +37,6 @@ const userRegistrationValidators = [
       }
     }),
 
-  // Password validation
   body("password")
     .exists({ checkFalsy: true })
     .withMessage("You must type a password")
@@ -46,7 +44,6 @@ const userRegistrationValidators = [
     .withMessage("Password must be at least 4 characters long")
     .trim(),
 
-  // Confirm password validation
   body("confirmPassword")
     .exists({ checkFalsy: true })
     .withMessage("You must type a confirmation password")
@@ -55,7 +52,6 @@ const userRegistrationValidators = [
     .custom((value, { req }) => value === req.body.password)
     .withMessage("The passwords do not match"),
 
-  // Email validation
   body("email")
     .exists({ checkFalsy: true })
     .withMessage("You must type an email")

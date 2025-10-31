@@ -1,4 +1,4 @@
-import prisma from "../config/prismaClient.js";
+import prisma from "../config/prisma-client.js";
 
 // Controller to get total number of users
 export const getTotalUsersCount = async (req, res, next) => {

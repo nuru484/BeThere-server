@@ -1,6 +1,6 @@
 import jwt from "jsonwebtoken";
 import ENV from "../config/env.js";
-import { verifyJwtToken } from "../utils/verifyJwtToken.js";
+import { verifyJwtToken } from "../utils/verify-jwt-token.js";
 
 export const refreshToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;

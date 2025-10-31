@@ -4,9 +4,9 @@ const routes = Router();
 import authRoutes from "./auth.js";
 import eventRoutes from "./event.js";
 import attendanceRoutes from "./attendance.js";
-import refreshTokenRoute from "./refreshToken.js";
+import refreshTokenRoute from "./refresh-token.js";
 import usersRoutes from "./users.js";
-import adminDashboardRoutes from "./adminDashboard.js";
+import adminDashboardRoutes from "./dashboard.js";
 import faceScanRoutes from "./facescan.js";
 
 routes.use("/auth", authRoutes);

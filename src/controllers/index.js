@@ -22,7 +22,7 @@ import {
   getAllUserIdentifications,
   updateUserRole,
 } from "./users.js";
-import { refreshToken } from "./refreshJwtToken.js";
+import { refreshToken } from "./refresh-jwt-token.js";
 
 import {
   getTotalUsersCount,
@@ -30,7 +30,7 @@ import {
   getUpcomingEventsCount,
   getAttendanceRecordsToday,
   getRecentActivityFeed,
-} from "./adminDashboard.js";
+} from "./dashboard.js";
 
 import { addFaceScan, getFaceScan, deleteFaceScan } from "./facescan.js";
 

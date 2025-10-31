@@ -1,5 +1,5 @@
 import ENV from "../config/env.js";
-import { verifyJwtToken } from "../utils/verifyJwtToken.js";
+import { verifyJwtToken } from "../utils/verify-jwt-token.js";
 
 // Middleware to authenticate users with  access token
 export const authenticateJWT = async (req, res, next) => {

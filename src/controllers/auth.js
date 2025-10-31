@@ -1,4 +1,4 @@
-import prisma from "../config/prismaClient.js";
+import prisma from "../config/prisma-client.js";
 import { compare } from "bcrypt";
 import {
   CustomError,

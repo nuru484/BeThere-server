@@ -8,8 +8,8 @@ import {
   getEventById,
   getAllEvents,
 } from "../controllers/index.js";
-import { authorizeRole } from "../middleware/authorizeRole.js";
-import { authenticateJWT } from "../middleware/jwtAuthentication.js";
+import { authorizeRole } from "../middleware/authorize-role.js";
+import { authenticateJWT } from "../middleware/jwt-authentication.js";
 
 router.post("/", authenticateJWT, authorizeRole(["ADMIN"]), createEvent);
 

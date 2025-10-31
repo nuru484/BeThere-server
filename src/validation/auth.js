@@ -1,18 +1,16 @@
-import { body } from 'express-validator';
-import handleValidationErrors from './validationErrorHandler.js';
+import { body } from "express-validator";
+import handleValidationErrors from "./validation-error-handler.js";
 
 const loginValidators = [
-  // Username validation
-  body('username')
+  body("username")
     .exists({ checkFalsy: true })
-    .withMessage('You must type a username')
+    .withMessage("You must type a username")
     .trim()
     .escape(),
 
-  // Password validation
-  body('password')
+  body("password")
     .exists({ checkFalsy: true })
-    .withMessage('You must type a password')
+    .withMessage("You must type a password")
     .trim()
     .escape(),
 ];
