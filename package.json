@@ -1,12 +1,14 @@
 {
-  "name": "qrcode",
+  "name": "bethere-server",
   "version": "1.0.0",
   "main": "index.js",
   "type": "module",
   "scripts": {
     "dev": "node --watch --env-file .env server",
     "migrate": "npx prisma migrate dev --name init",
-    "start": "node server.js"
+    "start": "node server.js",
+    "deploy": "npm install && npx prisma migrate deploy && npm run seed && npm run build",
+    "seed": "node prisma/seed.js"
   },
   "author": "",
   "license": "ISC",

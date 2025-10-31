@@ -1,16 +1,17 @@
 // prisma/seed.ts
-import { UserRole } from '../generated/prisma/client';
-import prisma from '../src/config/prismaClient';
-import * as bcrypt from 'bcrypt';
-import logger from '../src/utils/logger';
-import ENV from '../src/config/env';
+import { role } from "@prisma/client";
+import prisma from "../src/config/prisma-client.js";
+import * as bcrypt from "bcrypt";
+import logger from "../src/utils/logger.js";
+import ENV from "../src/config/env.js";
 
 async function main() {
-  logger.info('🌱 Starting database seeding...');
+  logger.info("🌱 Starting database seeding...");
 
   const adminEmail = ENV.ADMIN_EMAIL;
   const adminPassword = ENV.ADMIN_PASSWORD;
-  const adminName = ENV.ADMIN_NAME;
+  const adminFirstName = ENV.ADMIN_FIRSTNAME;
+  const adminLastName = ENV.ADMIN_LASTNAME;
   const adminPhone = ENV.ADMIN_PHONE;
 
   const hashedPassword = await bcrypt.hash(adminPassword, 10);
@@ -18,27 +19,30 @@ async function main() {
   const admin = await prisma.user.upsert({
     where: { email: adminEmail },
     update: {
-      name: adminName,
+      firstName: adminFirstName,
+      lastName: adminLastName,
       password: hashedPassword,
-      role: UserRole.ADMIN,
+      role: role.ADMIN,
       phone: adminPhone,
       updatedAt: new Date(),
     },
     create: {
       email: adminEmail,
-      name: adminName,
+      firstName: adminFirstName,
+      lastName: adminLastName,
       password: hashedPassword,
-      role: UserRole.ADMIN,
+      role: role.ADMIN,
       phone: adminPhone,
     },
   });
 
   logger.info({
-    message: '✅ Admin user seeded successfully',
+    message: "✅ Admin user seeded successfully",
     admin: {
       id: admin.id,
       email: admin.email,
-      name: admin.name,
+      firstName: admin.firstName,
+      lastName: admin.lastName,
       role: admin.role,
     },
   });
@@ -46,7 +50,7 @@ async function main() {
 
 main()
   .catch((e) => {
-    logger.error('❌ Error seeding database:', e);
+    logger.error(e, "❌ Error during database seeding");
     process.exit(1);
   })
   .finally(async () => {
