@@ -6,7 +6,7 @@ import eventRoutes from "./event.js";
 import attendanceRoutes from "./attendance.js";
 import refreshTokenRoute from "./refreshToken.js";
 import usersRoutes from "./users.js";
-import adminDashboardRoutes from "./dashboard/adminDashboard.js";
+import adminDashboardRoutes from "./adminDashboard.js";
 import faceScanRoutes from "./facescan.js";
 
 routes.use("/auth", authRoutes);

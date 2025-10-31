@@ -7,7 +7,7 @@ import {
   getUpcomingEventsCount,
   getAttendanceRecordsToday,
   getRecentActivityFeed,
-} from "../../controllers/index.js";
+} from "../controllers/index.js";
 
 router.get("/users", getTotalUsersCount);
 router.get("/events/total", getTotalEventsCount);

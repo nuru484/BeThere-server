@@ -1,6 +1,11 @@
 import prisma from "../config/prismaClient.js";
 import { compare } from "bcrypt";
-import { CustomError } from "../middleware/errorHandler.js";
+import {
+  CustomError,
+  NotFoundError,
+  BadRequestError,
+  ValidationError,
+} from "../middleware/error-handler.js";
 import ENV from "../config/env.js";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
@@ -15,17 +20,17 @@ export const login = async (req, res, next) => {
     });
 
     if (!user) {
-      throw new CustomError(404, "User not found");
+      throw new NotFoundError("User not found");
     }
 
     if (!password || (user && !user.password)) {
-      throw new Error("Password or hash missing");
+      throw new BadRequestError("Password or hash missing");
     }
 
     const isPasswordValid = await compare(password, user.password);
 
     if (!isPasswordValid) {
-      throw new CustomError(401, "Invalid credentials");
+      throw new ValidationError(401, "Invalid credentials");
     }
 
     const accessToken = jwt.sign(
@@ -63,41 +68,33 @@ export const signup = async (req, res, next) => {
   const { identification, ...userDetails } = req.body;
 
   try {
-    // Check if req.user exists and is admin
     if (req.user && req.user.role === "ADMIN") {
-      // Fetch the last userIdentification
       const lastIdentification = await prisma.userIdentification.findFirst({
         orderBy: { id: "desc" },
       });
 
-      // Generate new identity number
       let newIdentityNumber;
       if (
         lastIdentification &&
         lastIdentification.identityNumber.startsWith(idPrefix)
       ) {
-        // Extract numeric part and increment
         const numericPart = parseInt(
           lastIdentification.identityNumber.replace(idPrefix, ""),
           10
         );
         newIdentityNumber = `${idPrefix}${numericPart + 1}`;
       } else {
-        // If no previous identification or invalid format, start with TaTU1000000000
         newIdentityNumber = `${idPrefix}1000000000`;
       }
 
-      // Create UserIdentification
       const userIdentification = await prisma.userIdentification.create({
         data: {
           identityNumber: newIdentityNumber,
         },
       });
 
-      // Hash password
       const hashedPassword = await bcrypt.hash(userDetails.password, 10);
 
-      // Create user with identification
       const user = await prisma.user.create({
         data: {
           ...userDetails,
@@ -115,10 +112,7 @@ export const signup = async (req, res, next) => {
         message: "Registration successful.",
         data: userWithoutPassword,
       });
-    }
-    // Non-admin or no user
-    else {
-      // Check if this is the first user
+    } else {
       const isFirstUser = (await prisma.user.findFirst()) === null;
 
       if (!isFirstUser && !identification) {
@@ -130,15 +124,13 @@ export const signup = async (req, res, next) => {
 
       let userIdentificationId = null;
 
-      // If identification is provided, validate and use it
       if (identification) {
-        // Check if identification exists in DB and include the related user
         const userIdentification = await prisma.userIdentification.findUnique({
           where: {
             identityNumber: identification,
           },
           include: {
-            user: true, // Include the related user data
+            user: true,
           },
         });
 
@@ -146,7 +138,6 @@ export const signup = async (req, res, next) => {
           throw new CustomError(404, "Invalid identification number.");
         }
 
-        // Check if identification is already taken (correct check for one-to-one relationship)
         if (userIdentification.user) {
           throw new CustomError(409, "Identification is already taken.");
         }
@@ -154,17 +145,14 @@ export const signup = async (req, res, next) => {
         userIdentificationId = userIdentification.id;
       }
 
-      // Hash password
       const hashedPassword = await bcrypt.hash(userDetails.password, 10);
 
-      // Create user data object
       const userData = {
         ...userDetails,
         password: hashedPassword,
         role: isFirstUser ? "ADMIN" : "USER",
       };
 
-      // Only connect identification if it exists
       if (userIdentificationId) {
         userData.identification = {
           connect: {
@@ -173,7 +161,6 @@ export const signup = async (req, res, next) => {
         };
       }
 
-      // Create user
       const user = await prisma.user.create({
         data: userData,
       });

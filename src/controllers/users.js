@@ -1,12 +1,10 @@
 import prisma from "../config/prismaClient.js";
-import { CustomError } from "../middleware/errorHandler.js";
+import { CustomError } from "../middleware/error-handler.js";
 
-// Controller to fetch all users with pagination, excluding passwords
 export const getAllUsers = async (req, res, next) => {
   try {
     const { page = 1, limit = 10 } = req.query;
 
-    // Retrieve paginated users with related data, excluding password
     const users = await prisma.user.findMany({
       skip: (parseInt(page) - 1) * parseInt(limit),
       take: parseInt(limit),
@@ -48,33 +46,27 @@ export const getAllUsers = async (req, res, next) => {
   }
 };
 
-// Controller to create a UserIdentification
 export const createUserIdentification = async (req, res, next) => {
   try {
-    const idPrefix = "TaTU"; // Assuming same prefix as signup example
-    // Fetch the last userIdentification
+    const idPrefix = "TaTU";
     const lastIdentification = await prisma.userIdentification.findFirst({
       orderBy: { id: "desc" },
     });
 
-    // Generate new identity number
     let newIdentityNumber;
     if (
       lastIdentification &&
       lastIdentification.identityNumber.startsWith(idPrefix)
     ) {
-      // Extract numeric part and increment
       const numericPart = parseInt(
         lastIdentification.identityNumber.replace(idPrefix, ""),
         10
       );
       newIdentityNumber = `${idPrefix}${numericPart + 1}`;
     } else {
-      // Start with TaTU1000000000 if no previous identification or invalid format
       newIdentityNumber = `${idPrefix}1000000000`;
     }
 
-    // Create UserIdentification
     const userIdentification = await prisma.userIdentification.create({
       data: {
         identityNumber: newIdentityNumber,
@@ -90,12 +82,10 @@ export const createUserIdentification = async (req, res, next) => {
   }
 };
 
-// Controller to delete a user
 export const deleteUser = async (req, res, next) => {
   try {
     const { userId } = req.params;
 
-    // Check if user exists
     const user = await prisma.user.findUnique({
       where: { id: parseInt(userId) },
     });
@@ -104,7 +94,6 @@ export const deleteUser = async (req, res, next) => {
       throw new CustomError(404, "User not found.");
     }
 
-    // Delete user (cascades to UserIdentification due to schema)
     await prisma.user.delete({
       where: { id: parseInt(id) },
     });
@@ -117,7 +106,6 @@ export const deleteUser = async (req, res, next) => {
   }
 };
 
-// Controller to update user details
 export const updateUser = async (req, res, next) => {
   try {
     const { userId } = req.params;
@@ -130,7 +118,6 @@ export const updateUser = async (req, res, next) => {
       faceScan,
     } = req.body;
 
-    // Check if user exists
     const user = await prisma.user.findUnique({
       where: { id: parseInt(userId) },
     });
@@ -139,7 +126,6 @@ export const updateUser = async (req, res, next) => {
       throw new CustomError(404, "User not found.");
     }
 
-    // Update user details
     const updatedUser = await prisma.user.update({
       where: { id: parseInt(userId) },
       data: {
@@ -174,12 +160,10 @@ export const updateUser = async (req, res, next) => {
   }
 };
 
-// Controller to fetch all UserIdentifications with pagination
 export const getAllUserIdentifications = async (req, res, next) => {
   try {
     const { page = 1, limit = 10 } = req.query;
 
-    // Retrieve paginated user identifications with related user data
     const userIdentifications = await prisma.userIdentification.findMany({
       skip: (parseInt(page) - 1) * parseInt(limit),
       take: parseInt(limit),
@@ -230,12 +214,10 @@ export const updateUserRole = async (req, res, next) => {
     const { userId } = req.params;
     const { role } = req.body;
 
-    // Validate role
     if (!["ADMIN", "USER"].includes(role)) {
       throw new CustomError(400, "Invalid role. Must be ADMIN or USER.");
     }
 
-    // Check if user exists
     const user = await prisma.user.findUnique({
       where: { id: parseInt(userId) },
     });
@@ -244,14 +226,10 @@ export const updateUserRole = async (req, res, next) => {
       throw new CustomError(404, "User not found.");
     }
 
-    console.log(req);
-
-    // Prevent users from updating their own role
     if (req.user.id === parseInt(userId)) {
       throw new CustomError(403, "You cannot update your own role.");
     }
 
-    // Update user role
     const updatedUser = await prisma.user.update({
       where: { id: parseInt(userId) },
       data: {

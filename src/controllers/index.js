@@ -30,7 +30,7 @@ import {
   getUpcomingEventsCount,
   getAttendanceRecordsToday,
   getRecentActivityFeed,
-} from "./dashboard/adminDashboard.js";
+} from "./adminDashboard.js";
 
 import { addFaceScan, getFaceScan, deleteFaceScan } from "./facescan.js";
 
