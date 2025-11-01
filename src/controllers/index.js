@@ -1,4 +1,6 @@
 export * from "./auth.js";
+export * from "./users.js";
+
 import {
   createAttendance,
   updateAttendance,
@@ -14,12 +16,7 @@ import {
   getEventById,
   getAllEvents,
 } from "./event.js";
-import {
-  getAllUsers,
-  deleteUser,
-  updateUser,
-  updateUserRole,
-} from "./users.js";
+
 import { refreshToken } from "./refresh-jwt-token.js";
 
 import {
@@ -44,10 +41,6 @@ export {
   getUserEventAttendance,
   getUserAttendance,
   getEventAttendance,
-  getAllUsers,
-  deleteUser,
-  updateUser,
-  updateUserRole,
   refreshToken,
   getTotalUsersCount,
   getTotalEventsCount,

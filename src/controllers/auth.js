@@ -1,9 +1,8 @@
 import prisma from "../config/prisma-client.js";
 import { compare } from "bcrypt";
-import { CustomError, ValidationError } from "../middleware/error-handler.js";
+import { ValidationError } from "../middleware/error-handler.js";
 import ENV from "../config/env.js";
 import jwt from "jsonwebtoken";
-import bcrypt from "bcrypt";
 import { validationMiddleware } from "../validation/validation-error-handler.js";
 import { loginValidation } from "../validation/auth.js";
 import { asyncHandler } from "../middleware/error-handler.js";

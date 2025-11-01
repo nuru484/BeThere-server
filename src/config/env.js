@@ -25,6 +25,21 @@ const ENV = {
     process.env.REFRESH_TOKEN_SECRET,
     "REFRESH_TOKEN_SECRET"
   ),
+
+  CLOUDINARY_CLOUD_NAME: assertEnv(
+    process.env.CLOUDINARY_CLOUD_NAME,
+    "CLOUDINARY_CLOUD_NAME"
+  ),
+
+  CLOUDINARY_API_KEY: assertEnv(
+    process.env.CLOUDINARY_API_KEY,
+    "CLOUDINARY_API_KEY"
+  ),
+
+  CLOUDINARY_API_SECRET: assertEnv(
+    process.env.CLOUDINARY_API_SECRET,
+    "CLOUDINARY_API_SECRET"
+  ),
 };
 
 export default ENV;

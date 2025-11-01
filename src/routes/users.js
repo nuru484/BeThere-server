@@ -2,24 +2,25 @@ import { Router } from "express";
 const router = Router();
 
 import {
+  addUser,
+  updateUserProfile,
+  updateUserRole,
+  getUserById,
   getAllUsers,
   deleteUser,
-  updateUser,
-  updateUserRole,
+  deleteAllUsers,
 } from "../controllers/index.js";
 import { authorizeRole } from "../middleware/authorize-role.js";
 import { authenticateJWT } from "../middleware/jwt-authentication.js";
 
-router.get("/", authenticateJWT, authorizeRole(["ADMIN"]), getAllUsers);
+router.post("/", authenticateJWT, authorizeRole(["ADMIN"]), ...addUser);
 
-router.delete(
+router.put(
   "/:userId",
   authenticateJWT,
-  authorizeRole(["ADMIN"]),
-  deleteUser
+  authorizeRole(["ADMIN", "USER"]),
+  updateUserProfile
 );
-
-router.put("/:userId", authenticateJWT, authorizeRole(["ADMIN"]), updateUser);
 
 router.patch(
   "/:userId/role",
@@ -27,5 +28,23 @@ router.patch(
   authorizeRole(["ADMIN"]),
   updateUserRole
 );
+
+router.get(
+  "/:userId",
+  authenticateJWT,
+  authorizeRole(["ADMIN", "USER"]),
+  getUserById
+);
+
+router.get("/", authenticateJWT, authorizeRole(["ADMIN"]), getAllUsers);
+
+router.delete(
+  "/:userId",
+  authenticateJWT,
+  authorizeRole(["ADMIN"]),
+  deleteAllUsers
+);
+
+router.delete("/", authenticateJWT, authorizeRole(["ADMIN"]), deleteUser);
 
 export default router;

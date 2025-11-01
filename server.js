@@ -9,6 +9,7 @@ import {
   errorHandler,
 } from "./src/middleware/error-handler.js";
 import logger from "./src/utils/logger.js";
+import { v2 as cloudinary } from "cloudinary";
 
 const app = express();
 
@@ -49,6 +50,12 @@ app.use((req, res, next) => {
 });
 
 app.use(errorHandler);
+
+cloudinary.config({
+  cloud_name: ENV.CLOUDINARY_CLOUD_NAME,
+  api_key: ENV.CLOUDINARY_API_KEY,
+  api_secret: ENV.CLOUDINARY_API_SECRET,
+});
 
 const port = ENV.PORT || 3000;
 app.listen(port, () => {
