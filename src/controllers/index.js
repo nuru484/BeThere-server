@@ -1,4 +1,4 @@
-import { login, signup } from "./auth.js";
+export * from "./auth.js";
 import {
   createAttendance,
   updateAttendance,
@@ -16,10 +16,8 @@ import {
 } from "./event.js";
 import {
   getAllUsers,
-  createUserIdentification,
   deleteUser,
   updateUser,
-  getAllUserIdentifications,
   updateUserRole,
 } from "./users.js";
 import { refreshToken } from "./refresh-jwt-token.js";
@@ -35,8 +33,6 @@ import {
 import { addFaceScan, getFaceScan, deleteFaceScan } from "./facescan.js";
 
 export {
-  signup,
-  login,
   createEvent,
   updateEvent,
   deleteEvent,
@@ -49,10 +45,8 @@ export {
   getUserAttendance,
   getEventAttendance,
   getAllUsers,
-  createUserIdentification,
   deleteUser,
   updateUser,
-  getAllUserIdentifications,
   updateUserRole,
   refreshToken,
   getTotalUsersCount,

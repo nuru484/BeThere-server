@@ -1,18 +1,18 @@
 import { body } from "express-validator";
-import handleValidationErrors from "./validation-error-handler.js";
 
-const loginValidators = [
-  body("username")
+export const loginValidation = [
+  body("email")
     .exists({ checkFalsy: true })
-    .withMessage("You must type a username")
-    .trim()
-    .escape(),
+    .withMessage("Email is required")
+    .isEmail()
+    .withMessage("Invalid email format")
+    .normalizeEmail(),
 
   body("password")
     .exists({ checkFalsy: true })
-    .withMessage("You must type a password")
+    .withMessage("Password is required")
+    .isLength({ min: 4 })
+    .withMessage("Password must be at least 4 characters long")
     .trim()
     .escape(),
 ];
-
-export default [...loginValidators, handleValidationErrors];

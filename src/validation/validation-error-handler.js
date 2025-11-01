@@ -1,6 +1,6 @@
 // src/middlewares/validation-middleware.js
 import { validationResult } from "express-validator";
-import { ValidationError as CustomValidationError } from "./error-handler.js";
+import { ValidationError as CustomValidationError } from "../middleware/error-handler.js";
 
 /**
  * Middleware to check validation results and pass errors to error handler
@@ -49,5 +49,3 @@ export const validationMiddleware = {
   delete: (validators) => [...validators, validateRequest],
   custom: (validators) => [...validators, validateRequest],
 };
-
-export default validationMiddleware;

@@ -3,10 +3,8 @@ const router = Router();
 
 import {
   getAllUsers,
-  createUserIdentification,
   deleteUser,
   updateUser,
-  getAllUserIdentifications,
   updateUserRole,
 } from "../controllers/index.js";
 import { authorizeRole } from "../middleware/authorize-role.js";
@@ -28,20 +26,6 @@ router.patch(
   authenticateJWT,
   authorizeRole(["ADMIN"]),
   updateUserRole
-);
-
-router.get(
-  "/identification",
-  authenticateJWT,
-  authorizeRole(["ADMIN"]),
-  getAllUserIdentifications
-);
-
-router.post(
-  "/identification",
-  authenticateJWT,
-  authorizeRole(["ADMIN"]),
-  createUserIdentification
 );
 
 export default router;
