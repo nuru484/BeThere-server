@@ -1,255 +1,311 @@
 import prisma from "../config/prisma-client.js";
+import {
+  asyncHandler,
+  NotFoundError,
+  ValidationError,
+} from "../middleware/error-handler.js";
+import { HTTP_STATUS_CODES } from "../config/constants.js";
+import { validationMiddleware } from "../validation/validation-error-handler.js";
+import {
+  createEventValidation,
+  updateEventValidation,
+} from "../validation/event.js";
 
-export const createEvent = async (req, res, next) => {
-  try {
-    const {
-      location,
-      startDate,
-      endDate,
-      startTime,
-      endTime,
-      ...eventDetails
-    } = req.body;
+const handleCreateEvent = asyncHandler(async (req, res, next) => {
+  const {
+    location,
+    startDate,
+    endDate,
+    startTime,
+    endTime,
+    isRecurring,
+    durationDays,
+    ...eventDetails
+  } = req.body;
 
-    // Validate location details
-    if (
-      !location ||
-      !location.name ||
-      !location.latitude ||
-      !location.longitude
-    ) {
-      return res.status(400).json({
-        message: "Location details (name, latitude, longitude) are required.",
-      });
-    }
-
-    // Validate startTime and endTime format (HH:mm)
-    const timeRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
-    if (
-      !startTime ||
-      !endTime ||
-      !timeRegex.test(startTime) ||
-      !timeRegex.test(endTime)
-    ) {
-      return res.status(400).json({
-        message: "Start time and end time must be in HH:mm format.",
-      });
-    }
-
-    // Create the new event with a new location
-    const event = await prisma.event.create({
-      data: {
-        ...eventDetails,
-        startDate: startDate ? new Date(startDate) : null, // Ensure Date object for Prisma
-        endDate: endDate ? new Date(endDate) : null,
-        startTime, // String in HH:mm format
-        endTime, // String in HH:mm format
-        location: {
-          create: {
-            name: location.name,
-            latitude: parseFloat(location.latitude),
-            longitude: parseFloat(location.longitude),
-            city: location.city,
-            country: location.country,
-          },
-        },
-      },
+  if (!isRecurring && !endDate) {
+    return res.status(400).json({
+      message: "endDate is required for non-recurring events",
     });
-
-    res
-      .status(201)
-      .json({ message: "Event created successfully", data: event });
-  } catch (error) {
-    next(error);
   }
-};
 
-export const updateEvent = async (req, res, next) => {
-  try {
-    const { eventId } = req.params;
-    const {
-      location,
-      startDate,
-      endDate,
-      startTime,
-      endTime,
-      ...eventUpdateData
-    } = req.body;
+  let calculatedDuration = durationDays;
 
-    // Find the event by ID with its current location
-    const existingEvent = await prisma.event.findUnique({
-      where: { id: parseInt(eventId) },
-      include: { location: true },
-    });
+  if (!isRecurring && startDate && endDate) {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const diffTime = Math.abs(end - start);
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+    calculatedDuration = diffDays;
+  }
 
-    if (!existingEvent) {
-      return res
-        .status(404)
-        .json({ message: `Event with ID ${eventId} not found.` });
-    }
+  const eventData = {
+    ...eventDetails,
+    startDate: new Date(startDate),
+    endDate: endDate ? new Date(endDate) : null,
+    startTime,
+    endTime,
+    isRecurring: isRecurring || false,
+    durationDays: calculatedDuration || 1,
+    location: {
+      create: {
+        name: location.name,
+        latitude: parseFloat(location.latitude),
+        longitude: parseFloat(location.longitude),
+        city: location.city || null,
+        country: location.country || null,
+      },
+    },
+  };
 
-    // Validate time format (HH:mm) if provided
-    const timeRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
-    if (
-      (startTime && !timeRegex.test(startTime)) ||
-      (endTime && !timeRegex.test(endTime))
-    ) {
-      return res.status(400).json({
-        message: "Start time and end time must be in HH:mm format.",
-      });
-    }
+  const event = await prisma.event.create({
+    data: eventData,
+    include: {
+      location: true,
+    },
+  });
 
-    // Prepare update data - exclude fields that shouldn't be updated
-    const { id, createdAt, updatedAt, locationId, ...allowedUpdateData } =
-      eventUpdateData;
+  return res.status(HTTP_STATUS_CODES.CREATED || 201).json({
+    message: "Event created successfully",
+    data: event,
+  });
+});
 
-    const updateData = {
-      ...allowedUpdateData,
-      ...(startDate && { startDate: new Date(startDate) }),
-      ...(endDate && { endDate: new Date(endDate) }),
-      ...(startTime && { startTime }),
-      ...(endTime && { endTime }),
+export const createEvent = [
+  validationMiddleware.create(createEventValidation),
+  handleCreateEvent,
+];
+
+export const handleUpdateEvent = asyncHandler(async (req, res, next) => {
+  const { eventId } = req.params;
+  const {
+    location,
+    startDate,
+    endDate,
+    startTime,
+    endTime,
+    isRecurring,
+    durationDays,
+    ...eventUpdateData
+  } = req.body;
+
+  if (!eventId || isNaN(parseInt(eventId))) {
+    throw new ValidationError("Valid event ID is required.");
+  }
+
+  const existingEvent = await prisma.event.findUnique({
+    where: { id: parseInt(eventId) },
+    include: { location: true },
+  });
+
+  if (!existingEvent) {
+    throw new NotFoundError(`Event with ID ${eventId} not found.`);
+  }
+
+  const currentDate = new Date();
+  const eventEndDate = existingEvent.endDate || existingEvent.startDate;
+  const hasEventPassed = new Date(eventEndDate) < currentDate;
+
+  if (!existingEvent.isRecurring && hasEventPassed && !isRecurring) {
+    throw new ValidationError(
+      "Cannot update a non-recurring event that has already passed. Set isRecurring to true to convert it to a recurring event."
+    );
+  }
+
+  let calculatedDuration = durationDays;
+
+  const newStartDate = startDate
+    ? new Date(startDate)
+    : existingEvent.startDate;
+  const newEndDate = endDate ? new Date(endDate) : existingEvent.endDate;
+  const newIsRecurring =
+    isRecurring !== undefined ? isRecurring : existingEvent.isRecurring;
+
+  if (!newIsRecurring && !newEndDate) {
+    throw new ValidationError("endDate is required for non-recurring events");
+  }
+
+  if (!newIsRecurring && newStartDate && newEndDate) {
+    const start = new Date(newStartDate);
+    const end = new Date(newEndDate);
+    const diffTime = Math.abs(end - start);
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+    calculatedDuration = diffDays;
+  }
+
+  const updateData = {
+    ...eventUpdateData,
+    ...(startDate && { startDate: new Date(startDate) }),
+    ...(endDate !== undefined && {
+      endDate: endDate ? new Date(endDate) : null,
+    }),
+    ...(startTime && { startTime }),
+    ...(endTime && { endTime }),
+    ...(isRecurring !== undefined && { isRecurring }),
+    ...(calculatedDuration && { durationDays: calculatedDuration }),
+  };
+
+  if (location) {
+    updateData.location = {
+      update: {
+        name: location.name,
+        latitude: parseFloat(location.latitude),
+        longitude: parseFloat(location.longitude),
+        city: location.city || null,
+        country: location.country || null,
+      },
     };
-
-    // Handle location update if provided
-    if (location) {
-      if (!location.name || !location.latitude || !location.longitude) {
-        return res.status(400).json({
-          message: "Location details (name, latitude, longitude) are required.",
-        });
-      }
-
-      // Option 1: Update the existing location in place
-      updateData.location = {
-        update: {
-          name: location.name,
-          latitude: parseFloat(location.latitude),
-          longitude: parseFloat(location.longitude),
-          city: location.city,
-          country: location.country,
-        },
-      };
-    }
-
-    // Update the event
-    const updatedEvent = await prisma.event.update({
-      where: { id: parseInt(eventId) },
-      data: updateData,
-      include: { location: true }, // Include location in response
-    });
-
-    res
-      .status(200)
-      .json({ message: "Event updated successfully.", data: updatedEvent });
-  } catch (error) {
-    next(error);
   }
-};
 
-export const deleteEvent = async (req, res, next) => {
-  try {
-    const { eventId } = req.params;
+  const updatedEvent = await prisma.event.update({
+    where: { id: parseInt(eventId) },
+    data: updateData,
+    include: { location: true },
+  });
 
-    // Find the event by ID
-    const event = await prisma.event.findUnique({
-      where: { id: parseInt(eventId) },
-    });
+  return res.status(HTTP_STATUS_CODES.OK || 200).json({
+    message: "Event updated successfully",
+    data: updatedEvent,
+  });
+});
 
-    if (!event) {
-      return res
-        .status(404)
-        .json({ message: `Event with ID ${eventId} not found.` });
-    }
+export const updateEvent = [
+  validationMiddleware.create(updateEventValidation),
+  handleUpdateEvent,
+];
 
-    // Delete the event
-    await prisma.event.delete({
-      where: { id: parseInt(eventId) },
-    });
+export const deleteEvent = asyncHandler(async (req, res, next) => {
+  const { eventId } = req.params;
 
-    res.status(200).json({ message: "Event deleted successfully." });
-  } catch (error) {
-    next(error);
+  if (!eventId || isNaN(parseInt(eventId))) {
+    throw new ValidationError("Valid event ID is required.");
   }
-};
 
-export const deleteAllEvents = async (req, res, next) => {
-  try {
-    // Fetch all events with their locations
-    const events = await prisma.event.findMany({
-      include: { location: true },
-    });
+  const event = await prisma.event.findUnique({
+    where: { id: parseInt(eventId) },
+  });
 
-    if (events.length === 0) {
-      return res.status(200).json({ message: "No events to delete." });
-    }
-
-    // Delete all events (cascades to sessions)
-    await prisma.event.deleteMany({});
-
-    res.status(200).json({ message: "All events deleted successfully." });
-  } catch (error) {
-    next(error);
+  if (!event) {
+    throw new NotFoundError(`Event with ID ${eventId} not found.`);
   }
-};
 
-export const getEventById = async (req, res, next) => {
-  try {
-    const { eventId } = req.params;
+  await prisma.event.delete({
+    where: { id: parseInt(eventId) },
+  });
 
-    // Find the event by ID with related data
-    const event = await prisma.event.findUnique({
-      where: { id: parseInt(eventId) },
+  res.status(200).json({ message: "Event deleted successfully." });
+});
+
+export const deleteAllEvents = asyncHandler(async (req, res, next) => {
+  const eventsCount = await prisma.event.count();
+
+  if (eventsCount === 0) {
+    return res.status(200).json({ message: "No events to delete." });
+  }
+
+  if (userCount === 0) {
+    return res.status(HTTP_STATUS_CODES.OK || 200).json({
+      message: "No events to delete.",
+      data: {
+        deletedCount: 0,
+      },
+    });
+  }
+
+  await prisma.event.deleteMany({});
+
+  res.status(200).json({ message: "All events deleted successfully." });
+});
+
+export const getEventById = asyncHandler(async (req, res, next) => {
+  const { eventId } = req.params;
+
+  if (!eventId || isNaN(parseInt(eventId))) {
+    throw new ValidationError("Valid event ID is required.");
+  }
+
+  const event = await prisma.event.findUnique({
+    where: { id: parseInt(eventId) },
+    include: {
+      location: true,
+    },
+  });
+
+  if (!event) {
+    throw new NotFoundError(`Event with ID ${eventId} not found.`);
+  }
+
+  res.status(200).json({ message: "Event successfully fetched.", data: event });
+});
+
+export const getAllEvents = asyncHandler(async (req, res, next) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const skip = (page - 1) * limit;
+
+  const search = req.query.search || "";
+  const type = req.query.type;
+  const location = req.query.location;
+
+  const whereClause = {};
+
+  if (search) {
+    whereClause.OR = [
+      { title: { contains: search, mode: "insensitive" } },
+      { description: { contains: search, mode: "insensitive" } },
+      { type: { contains: search, mode: "insensitive" } },
+      { location: { city: { contains: search, mode: "insensitive" } } },
+    ];
+  }
+
+  if (type) {
+    whereClause.type = type;
+  }
+
+  if (location) {
+    whereClause.location = {
+      OR: [
+        { name: { contains: location, mode: "insensitive" } },
+        { city: { contains: location, mode: "insensitive" } },
+        { country: { contains: location, mode: "insensitive" } },
+      ],
+    };
+  }
+
+  const [events, totalRecords] = await Promise.all([
+    prisma.event.findMany({
+      where: whereClause,
+      skip,
+      take: limit,
+      orderBy: { createdAt: "desc" },
       include: {
         location: true,
       },
-    });
+    }),
+    prisma.event.count({ where: whereClause }),
+  ]);
 
-    if (!event) {
-      return res
-        .status(404)
-        .json({ message: `Event with ID ${eventId} not found.` });
-    }
-
-    res
-      .status(200)
-      .json({ message: "Event successfully fetched.", data: event });
-  } catch (error) {
-    next(error);
-  }
-};
-
-export const getAllEvents = async (req, res, next) => {
-  try {
-    const { page = 1, limit = 10 } = req.query;
-
-    // Retrieve paginated events with related data
-    const events = await prisma.event.findMany({
-      skip: (parseInt(page) - 1) * parseInt(limit),
-      take: parseInt(limit),
-      include: {
-        location: true,
-      },
-    });
-
-    const totalRecords = await prisma.event.count();
-
-    if (events.length === 0) {
-      return res
-        .status(200)
-        .json({ message: "There are no events at the moment." });
-    }
-
-    res.status(200).json({
-      message: "Events successfully fetched.",
-      data: events,
+  if (events.length === 0) {
+    return res.status(200).json({
+      message: "There are no events at the moment.",
+      data: [],
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        totalPages: Math.ceil(totalRecords / parseInt(limit)),
-        totalRecords,
+        totalRecords: 0,
+        page,
+        limit,
+        totalPages: 0,
       },
     });
-  } catch (error) {
-    next(error);
   }
-};
+
+  res.status(200).json({
+    message: "Events successfully fetched.",
+    data: events,
+    pagination: {
+      totalRecords,
+      page,
+      limit,
+      totalPages: Math.ceil(totalRecords / limit),
+    },
+  });
+});

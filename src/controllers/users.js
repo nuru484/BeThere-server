@@ -344,12 +344,7 @@ export const deleteUser = asyncHandler(async (req, res, next) => {
 
 // Delete All Users
 export const deleteAllUsers = asyncHandler(async (req, res, next) => {
-  const currentUserId = req.user?.id;
-  const currentUserRole = req.user?.role;
-
-  if (currentUserRole !== "ADMIN") {
-    throw new ForbiddenError("Only admins can delete all users.");
-  }
+  const currentUserId = req.user.id;
 
   const userCount = await prisma.user.count();
 

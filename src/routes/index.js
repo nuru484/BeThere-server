@@ -10,7 +10,7 @@ import adminDashboardRoutes from "./dashboard.js";
 import faceScanRoutes from "./facescan.js";
 
 routes.use("/auth", authRoutes);
-routes.use("/event", eventRoutes);
+routes.use("/events", eventRoutes);
 routes.use("/attendance", attendanceRoutes);
 routes.use("/refreshToken", refreshTokenRoute);
 routes.use("/users", usersRoutes);

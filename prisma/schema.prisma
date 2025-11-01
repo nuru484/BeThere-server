@@ -30,29 +30,33 @@ model User {
 }
 
 model Event {
-  id             Int       @id @default(autoincrement())
-  title          String
-  description    String?
-  startDate      DateTime?
-  endDate        DateTime?
-  startTime      String
-  endTime        String
-  location       Location  @relation(fields: [locationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  locationId     Int
-  type           String
-  isRecurring    Boolean   @default(false)
-  recurrenceRule String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  sessions       Session[]
+  id                 Int       @id @default(autoincrement())
+  title              String
+  description        String?
+  startDate          DateTime // First occurrence start date
+  endDate            DateTime? // Optional: when the occurrences end
+  isRecurring        Boolean   @default(false)
+  recurrenceInterval Int       @default(1) // Every X days/weeks (e.g., 3 for every 3 days)
+  durationDays       Int       @default(1) // How many days each occurrence lasts
+  startTime          String // When attendance opens (e.g., "06:00")
+  endTime            String // When attendance closes (e.g., "19:30")
+
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  locationId Int
+  type       String
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  sessions  Session[]
 }
 
 model Session {
-  id        Int      @id @default(autoincrement())
-  eventId   Int
-  date      DateTime
-  startTime String
-  endTime   String?
+  id            Int      @id @default(autoincrement())
+  eventId       Int
+  startDate     DateTime
+  endDate       DateTime
+  startDateTime DateTime
+  endDateTime   DateTime
 
   event       Event        @relation(fields: [eventId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   attendances Attendance[]
@@ -60,7 +64,7 @@ model Session {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([eventId, date])
+  @@unique([eventId, startDate])
 }
 
 model Location {
@@ -81,11 +85,18 @@ model Location {
   @@index([latitude, longitude])
 }
 
+enum AttendanceStatus {
+  PRESENT
+  LATE
+  ABSENT
+}
+
 model Attendance {
-  id        Int     @id @default(autoincrement())
-  attended  Boolean @default(false)
-  userId    Int
-  sessionId Int
+  id          Int              @id @default(autoincrement())
+  status      AttendanceStatus @default(ABSENT)
+  userId      Int
+  sessionId   Int
+  checkInTime DateTime?
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade)
