@@ -1,5 +1,6 @@
 export * from "./auth.js";
 export * from "./users.js";
+export * from "./facescan.js";
 
 import {
   createAttendance,
@@ -8,6 +9,7 @@ import {
   getEventAttendance,
   getUserEventAttendance,
 } from "./attendance.js";
+
 import {
   createEvent,
   updateEvent,
@@ -27,8 +29,6 @@ import {
   getRecentActivityFeed,
 } from "./dashboard.js";
 
-import { addFaceScan, getFaceScan, deleteFaceScan } from "./facescan.js";
-
 export {
   createEvent,
   updateEvent,
@@ -47,7 +47,4 @@ export {
   getUpcomingEventsCount,
   getAttendanceRecordsToday,
   getRecentActivityFeed,
-  addFaceScan,
-  getFaceScan,
-  deleteFaceScan,
 };

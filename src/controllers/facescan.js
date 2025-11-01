@@ -1,138 +1,129 @@
 import prisma from "../config/prisma-client.js";
+import {
+  asyncHandler,
+  ConflictError,
+  ValidationError,
+  UnauthorizedError,
+  NotFoundError,
+} from "../middleware/error-handler.js";
+import { faceScanValidation } from "../validation/face-scan-validation.js";
+import { validationMiddleware } from "../validation/validation-error-handler.js";
 
-export const addFaceScan = async (req, res, next) => {
-  try {
-    const { userId, faceScan } = req.body;
-    const requestingUserId = req.user.id;
+const handleAddFaceScan = asyncHandler(async (req, res, next) => {
+  const { faceScan } = req.body;
+  const userId = req.user.id;
 
-    if (!userId || !faceScan) {
-      return res.status(400).json({
-        message: "User ID and face scan data are required.",
-      });
-    }
+  const user = await prisma.user.findUnique({
+    where: { id: parseInt(userId) },
+  });
 
-    const user = await prisma.user.findUnique({
-      where: { id: parseInt(userId) },
-    });
-
-    if (!user) {
-      return res.status(404).json({
-        message: `User with ID ${userId} not found.`,
-      });
-    }
-
-    const isAdmin = await prisma.user.findUnique({
-      where: { id: requestingUserId },
-      select: { role: true },
-    });
-
-    if (
-      user.id !== requestingUserId &&
-      (!isAdmin || isAdmin.role !== "ADMIN")
-    ) {
-      return res.status(403).json({
-        message: "You are not authorized to add a face scan for this user.",
-      });
-    }
-
-    if (user.faceScan) {
-      return res.status(403).json({
-        message:
-          "User already has a face scan. Contact an admin to delete the existing face scan before adding a new one.",
-      });
-    }
-
-    const updatedUser = await prisma.user.update({
-      where: { id: parseInt(userId) },
-      data: { faceScan },
-    });
-
-    res.status(200).json({
-      message: "Face scan added successfully.",
-      data: {
-        faceScan: updatedUser.faceScan,
-      },
-    });
-  } catch (error) {
-    next(error);
+  if (!user) {
+    throw new NotFoundError("User not found.");
   }
-};
 
-export const getFaceScan = async (req, res, next) => {
-  try {
-    const { userId } = req.params;
-    const requestingUserId = req.user.id;
-
-    const user = await prisma.user.findUnique({
-      where: { id: parseInt(userId) },
-    });
-
-    if (!user) {
-      return res.status(404).json({
-        message: `User with ID ${userId} not found.`,
-      });
-    }
-
-    const isAdmin = await prisma.user.findUnique({
-      where: { id: requestingUserId },
-      select: { role: true },
-    });
-
-    if (
-      user.id !== requestingUserId &&
-      (!isAdmin || isAdmin.role !== "ADMIN")
-    ) {
-      return res.status(403).json({
-        message: "You are not authorized to view this user's face scan.",
-      });
-    }
-
-    if (!user.faceScan) {
-      return res.status(404).json({
-        message: `No face scan data found for user with ID ${userId}.`,
-      });
-    }
-
-    res.status(200).json({
-      message: "Face scan retrieved successfully.",
-      data: {
-        faceScan: user.faceScan,
-      },
-    });
-  } catch (error) {
-    next(error);
+  if (user.faceScan) {
+    throw new ConflictError(
+      "User face scan already exists. Contact an admin to reset your face scan before updating."
+    );
   }
-};
 
-export const deleteFaceScan = async (req, res, next) => {
-  try {
-    const { userId } = req.params;
+  const updatedUser = await prisma.user.update({
+    where: { id: parseInt(userId) },
+    data: { faceScan },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true,
+      profilePicture: true,
+      phone: true,
+      faceScan: true,
+      role: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
 
-    const user = await prisma.user.findUnique({
-      where: { id: parseInt(userId) },
-    });
+  res.status(200).json({
+    message: "Face scan added successfully.",
+    data: {
+      faceScan: updatedUser.faceScan,
+    },
+  });
+});
 
-    if (!user) {
-      return res.status(404).json({
-        message: `User with ID ${userId} not found.`,
-      });
-    }
+export const addFaceScan = [
+  validationMiddleware.create(faceScanValidation),
+  handleAddFaceScan,
+];
 
-    if (!user.faceScan) {
-      return res.status(404).json({
-        message: `No face scan data found for user with ID ${userId}.`,
-      });
-    }
+export const getUserFaceScan = asyncHandler(async (req, res, next) => {
+  const { userId } = req.params;
+  const currentUserId = req.user.id;
+  const currentUserRole = req.user.role;
 
-    await prisma.user.update({
-      where: { id: parseInt(userId) },
-      data: { faceScan: null },
-    });
-
-    res.status(200).json({
-      message: "Face scan deleted successfully.",
-    });
-  } catch (error) {
-    next(error);
+  if (!userId || isNaN(parseInt(userId))) {
+    throw new ValidationError("Valid user ID is required.");
   }
-};
+
+  const targetUserId = parseInt(userId);
+
+  if (
+    targetUserId !== parseInt(currentUserId?.toString() || "0") &&
+    currentUserRole !== "ADMIN"
+  ) {
+    throw new UnauthorizedError(
+      "Only admins can access other users' face scans."
+    );
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: targetUserId },
+  });
+
+  if (!user) {
+    throw new NotFoundError("User not found.");
+  }
+
+  if (!user.faceScan) {
+    throw new NotFoundError("No face scan data found for the user.");
+  }
+
+  res.status(200).json({
+    message: "Face scan retrieved successfully.",
+    data: {
+      faceScan: user.faceScan,
+    },
+  });
+});
+
+export const deleteUserFaceScan = asyncHandler(async (req, res, next) => {
+  const { userId } = req.params;
+
+  if (!userId || isNaN(parseInt(userId))) {
+    throw new ValidationError("Valid user ID is required.");
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: parseInt(userId) },
+  });
+
+  if (!user) {
+    throw new NotFoundError("User not found.");
+  }
+
+  if (!user.faceScan) {
+    throw new NotFoundError(
+      `No face scan data found for user with ID ${userId}.`
+    );
+  }
+
+  await prisma.user.update({
+    where: { id: parseInt(userId) },
+    data: { faceScan: null },
+  });
+
+  res.status(200).json({
+    message: "Face scan deleted successfully.",
+  });
+});
