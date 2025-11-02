@@ -40,6 +40,8 @@ const ENV = {
     process.env.CLOUDINARY_API_SECRET,
     "CLOUDINARY_API_SECRET"
   ),
+
+  REDIS_URL: assertEnv(process.env.REDIS_URL, "REDIS_URL"),
 };
 
 export default ENV;

@@ -10,6 +10,9 @@ import {
   createEventValidation,
   updateEventValidation,
 } from "../validation/event.js";
+import { sessionQueue } from "../jobs/session-queue.js";
+import { startOfDay, addDays } from "date-fns";
+import logger from "../utils/logger.js";
 
 const handleCreateEvent = asyncHandler(async (req, res, next) => {
   const {
@@ -65,6 +68,28 @@ const handleCreateEvent = asyncHandler(async (req, res, next) => {
     },
   });
 
+  // ============ SCHEDULE FIRST SESSION ============
+  try {
+    const eventStartDate = startOfDay(new Date(startDate));
+    const now = new Date();
+    const delay = eventStartDate.getTime() - now.getTime();
+
+    if (delay > 0) {
+      // Event starts in the future - schedule for that date
+      await sessionQueue.add("createSession", { eventId: event.id }, { delay });
+      logger.info(
+        `📅 Scheduled first session for event ${
+          event.id
+        } on ${eventStartDate.toISOString()}`
+      );
+    } else {
+      await sessionQueue.add("createSession", { eventId: event.id });
+      logger.info(`📅 Queued immediate session creation for event ${event.id}`);
+    }
+  } catch (error) {
+    logger.info(error, `❌ Failed to schedule session for event ${event.id}:`);
+  }
+
   return res.status(HTTP_STATUS_CODES.CREATED || 201).json({
     message: "Event created successfully",
     data: event,
@@ -95,7 +120,13 @@ export const handleUpdateEvent = asyncHandler(async (req, res, next) => {
 
   const existingEvent = await prisma.event.findUnique({
     where: { id: parseInt(eventId) },
-    include: { location: true },
+    include: {
+      location: true,
+      sessions: {
+        orderBy: { startDate: "desc" },
+        take: 1,
+      },
+    },
   });
 
   if (!existingEvent) {
@@ -160,8 +191,105 @@ export const handleUpdateEvent = asyncHandler(async (req, res, next) => {
   const updatedEvent = await prisma.event.update({
     where: { id: parseInt(eventId) },
     data: updateData,
-    include: { location: true },
+    include: {
+      location: true,
+      sessions: {
+        orderBy: { startDate: "desc" },
+        take: 1,
+      },
+    },
   });
+
+  // ============ HANDLE SESSION SCHEDULING AFTER UPDATE ============
+  try {
+    const startDateChanged =
+      startDate &&
+      new Date(startDate).getTime() !==
+        new Date(existingEvent.startDate).getTime();
+
+    const recurringStatusChanged =
+      isRecurring !== undefined && isRecurring !== existingEvent.isRecurring;
+
+    const hasNoSessions = existingEvent.sessions.length === 0;
+
+    if (hasNoSessions || startDateChanged || recurringStatusChanged) {
+      const eventStartDate = startOfDay(updatedEvent.startDate);
+      const now = new Date();
+
+      // Check if there's already a session for the new start date
+      const sessionExists = await prisma.session.findUnique({
+        where: {
+          eventId_startDate: {
+            eventId: updatedEvent.id,
+            startDate: eventStartDate,
+          },
+        },
+      });
+
+      if (!sessionExists) {
+        const delay = eventStartDate.getTime() - now.getTime();
+
+        if (delay > 0) {
+          await sessionQueue.add(
+            "createSession",
+            { eventId: updatedEvent.id },
+            { delay }
+          );
+          logger.info(
+            `📅 Rescheduled session for updated event ${updatedEvent.id}`
+          );
+        } else {
+          await sessionQueue.add("createSession", { eventId: updatedEvent.id });
+          logger.info(
+            `📅 Queued immediate session creation for updated event ${updatedEvent.id}`
+          );
+        }
+      } else {
+        logger.info(
+          `ℹ️ Session already exists for event ${
+            updatedEvent.id
+          } on ${eventStartDate.toISOString()}`
+        );
+      }
+    }
+
+    // If converted to recurring, schedule next occurrence
+    if (
+      recurringStatusChanged &&
+      updatedEvent.isRecurring &&
+      updatedEvent.sessions.length > 0
+    ) {
+      const lastSession = updatedEvent.sessions[0];
+      const nextSessionDate = addDays(
+        startOfDay(new Date(lastSession.startDate)),
+        updatedEvent.recurrenceInterval
+      );
+
+      const withinEventPeriod =
+        !updatedEvent.endDate ||
+        nextSessionDate <= new Date(updatedEvent.endDate);
+
+      if (withinEventPeriod) {
+        const delay = nextSessionDate.getTime() - new Date().getTime();
+
+        if (delay > 0) {
+          await sessionQueue.add(
+            "createSession",
+            { eventId: updatedEvent.id },
+            { delay }
+          );
+          logger.info(
+            `🔄 Scheduled next recurring session for event ${updatedEvent.id}`
+          );
+        }
+      }
+    }
+  } catch (error) {
+    logger.error(
+      error,
+      `❌ Failed to reschedule session for event ${updatedEvent.id}:`
+    );
+  }
 
   return res.status(HTTP_STATUS_CODES.OK || 200).json({
     message: "Event updated successfully",

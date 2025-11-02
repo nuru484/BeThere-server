@@ -8,7 +8,9 @@
     "migrate": "npx prisma migrate dev --name init",
     "start": "node server.js",
     "deploy": "npm install && npx prisma migrate deploy && npm run seed && npm run build",
-    "seed": "node prisma/seed.js"
+    "seed": "node prisma/seed.js",
+    "worker:dev": "node --env-file .env worker.js",
+    "worker": "node build/worker.js"
   },
   "author": "",
   "license": "ISC",
@@ -17,18 +19,20 @@
     "@prisma/client": "^6.2.1",
     "@turf/turf": "^7.2.0",
     "bcrypt": "^5.1.1",
+    "bullmq": "^5.63.0",
     "cloudinary": "^2.8.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
+    "date-fns": "^4.1.0",
     "express": "^4.21.2",
     "express-validator": "^7.2.1",
+    "ioredis": "^5.8.2",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
     "multer": "^2.0.2",
     "pino": "^10.1.0",
     "pino-pretty": "^13.1.2",
-    "qrcode": "^1.5.4",
-    "recharts": "^2.15.0"
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "prisma": "^6.2.1"

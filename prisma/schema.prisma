@@ -55,8 +55,8 @@ model Session {
   eventId       Int
   startDate     DateTime
   endDate       DateTime
-  startDateTime DateTime
-  endDateTime   DateTime
+  startTime DateTime
+  endTime   DateTime
 
   event       Event        @relation(fields: [eventId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   attendances Attendance[]
