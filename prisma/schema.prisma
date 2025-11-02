@@ -51,10 +51,10 @@ model Event {
 }
 
 model Session {
-  id            Int      @id @default(autoincrement())
-  eventId       Int
-  startDate     DateTime
-  endDate       DateTime
+  id        Int      @id @default(autoincrement())
+  eventId   Int
+  startDate DateTime
+  endDate   DateTime
   startTime DateTime
   endTime   DateTime
 
@@ -92,11 +92,12 @@ enum AttendanceStatus {
 }
 
 model Attendance {
-  id          Int              @id @default(autoincrement())
-  status      AttendanceStatus @default(ABSENT)
-  userId      Int
-  sessionId   Int
-  checkInTime DateTime?
+  id           Int              @id @default(autoincrement())
+  status       AttendanceStatus @default(ABSENT)
+  userId       Int
+  sessionId    Int
+  checkInTime  DateTime
+  checkOutTime DateTime?
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade)

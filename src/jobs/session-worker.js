@@ -47,8 +47,8 @@ export const sessionWorker = new Worker(
     const sessionEndDate = addDays(sessionStartDate, event.durationDays - 1);
 
     // Parse time strings and create full DateTime objects
-    const [startHour, startMinute] = event.startTime.split(":").map();
-    const [endHour, endMinute] = event.endTime.split(":").map();
+    const [startHour, startMinute] = event.startTime.split(":").map(Number);
+    const [endHour, endMinute] = event.endTime.split(":").map(Number);
 
     const startTime = new Date(sessionStartDate);
     startTime.setHours(startHour, startMinute, 0, 0);

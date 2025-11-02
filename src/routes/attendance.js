@@ -12,9 +12,19 @@ import {
 import { authorizeRole } from "../middleware/authorize-role.js";
 import { authenticateJWT } from "../middleware/jwt-authentication.js";
 
-router.post("/", createAttendance);
+router.post(
+  "/",
+  authenticateJWT,
+  authorizeRole(["ADMIN", "USER"]),
+  ...createAttendance
+);
 
-router.put("/", authenticateJWT, updateAttendance);
+router.put(
+  "/",
+  authenticateJWT,
+  authorizeRole(["ADMIN", "USER"]),
+  ...updateAttendance
+);
 
 router.get(
   "/user/:userId",

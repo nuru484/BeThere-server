@@ -12,9 +12,14 @@ import {
 import { authorizeRole } from "../middleware/authorize-role.js";
 import { authenticateJWT } from "../middleware/jwt-authentication.js";
 
-router.post("/", authenticateJWT, authorizeRole(["ADMIN"]), createEvent);
+router.post("/", authenticateJWT, authorizeRole(["ADMIN"]), ...createEvent);
 
-router.put("/:eventId", authenticateJWT, authorizeRole(["ADMIN"]), updateEvent);
+router.put(
+  "/:eventId",
+  authenticateJWT,
+  authorizeRole(["ADMIN"]),
+  ...updateEvent
+);
 
 router.delete(
   "/:eventId",

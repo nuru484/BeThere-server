@@ -7,6 +7,7 @@ import routes from "./src/routes/index.js";
 import {
   UnauthorizedError,
   errorHandler,
+  NotFoundError,
 } from "./src/middleware/error-handler.js";
 import logger from "./src/utils/logger.js";
 import { v2 as cloudinary } from "cloudinary";

@@ -90,7 +90,7 @@ const handleCreateEvent = asyncHandler(async (req, res, next) => {
     logger.info(error, `❌ Failed to schedule session for event ${event.id}:`);
   }
 
-  return res.status(HTTP_STATUS_CODES.CREATED || 201).json({
+   res.status(HTTP_STATUS_CODES.CREATED || 201).json({
     message: "Event created successfully",
     data: event,
   });
@@ -291,7 +291,7 @@ export const handleUpdateEvent = asyncHandler(async (req, res, next) => {
     );
   }
 
-  return res.status(HTTP_STATUS_CODES.OK || 200).json({
+  res.status(HTTP_STATUS_CODES.OK || 200).json({
     message: "Event updated successfully",
     data: updatedEvent,
   });

@@ -58,7 +58,7 @@ export const handleAddUser = asyncHandler(async (req, res, next) => {
     },
   });
 
-  return res.status(HTTP_STATUS_CODES.CREATED || 201).json({
+  res.status(HTTP_STATUS_CODES.CREATED || 201).json({
     message: "User created successfully.",
     data: newUser,
   });
