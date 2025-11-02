@@ -7,7 +7,7 @@
     "dev": "node --watch --env-file .env server",
     "migrate": "npx prisma migrate dev --name init",
     "start": "node server.js",
-    "deploy": "npm install && npx prisma migrate deploy && npm run seed && npm run build",
+    "deploy": "npm install && npx prisma migrate deploy && npm run seed",
     "seed": "node prisma/seed.js",
     "worker:dev": "node --env-file .env worker.js",
     "worker": "node build/worker.js"
@@ -31,8 +31,7 @@
     "morgan": "^1.10.0",
     "multer": "^2.0.2",
     "pino": "^10.1.0",
-    "pino-pretty": "^13.1.2",
-    "qrcode": "^1.5.4"
+    "pino-pretty": "^13.1.2"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
