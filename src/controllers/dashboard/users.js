@@ -1,290 +1,224 @@
+// src/controllers/dashboard/users.js
 import prisma from "../../config/prisma-client.js";
-import { asyncHandler, NotFoundError } from "../../middleware/error-handler.js";
+import {
+  asyncHandler,
+  ValidationError,
+} from "../../middleware/error-handler.js";
 import { HTTP_STATUS_CODES } from "../../config/constants.js";
-import { startOfDay, endOfDay, differenceInMilliseconds } from "date-fns";
+import { startOfDay, endOfDay, format } from "date-fns";
 
-export const getTodaysEvents = asyncHandler(async (req, res, _next) => {
-  const userId = req.user.id;
+export const getUserDashboardTotals = asyncHandler(async (req, res, _next) => {
+  const now = new Date();
+  const currentDate = startOfDay(now);
 
-  const user = await prisma.user.findUnique({
-    where: { id: parseInt(userId) },
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
+  const currentTimeString = `${currentHour
+    .toString()
+    .padStart(2, "0")}:${currentMinute.toString().padStart(2, "0")}`;
+
+  const [totalRecurringEvents, totalNonRecurringEvents, allSessions] =
+    await Promise.all([
+      prisma.event.count({
+        where: {
+          isRecurring: true,
+        },
+      }),
+
+      prisma.event.count({
+        where: {
+          isRecurring: false,
+        },
+      }),
+
+      prisma.session.findMany({
+        include: {
+          event: true,
+        },
+      }),
+    ]);
+
+  let totalActiveSessions = 0;
+  let totalInactiveSessions = 0;
+
+  allSessions.forEach((session) => {
+    const sessionStartDate = startOfDay(new Date(session.startDate));
+    const sessionEndDate = startOfDay(new Date(session.endDate));
+
+    const isWithinDateRange =
+      currentDate >= sessionStartDate && currentDate <= sessionEndDate;
+
+    const eventStartTime = session.event.startTime;
+    const eventEndTime = session.event.endTime;
+    const isWithinTimeWindow =
+      currentTimeString >= eventStartTime && currentTimeString <= eventEndTime;
+
+    if (isWithinDateRange && isWithinTimeWindow) {
+      totalActiveSessions++;
+    } else {
+      totalInactiveSessions++;
+    }
   });
 
-  if (!user) {
-    throw new NotFoundError(`User with ID ${userId} not found.`);
+  const totals = {
+    totalRecurringEvents,
+    totalNonRecurringEvents,
+    totalActiveSessions,
+    totalInactiveSessions,
+  };
+
+  res.status(HTTP_STATUS_CODES.OK || 200).json({
+    message: "Dashboard totals fetched successfully",
+    data: totals,
+  });
+});
+
+export const getRecentEvents = asyncHandler(async (req, res, _next) => {
+  const recentEvents = await prisma.event.findMany({
+    take: 5,
+    orderBy: {
+      createdAt: "desc",
+    },
+    select: {
+      title: true,
+      description: true,
+      startTime: true,
+      endTime: true,
+      location: {
+        select: {
+          name: true,
+          city: true,
+        },
+      },
+    },
+  });
+
+  res.status(HTTP_STATUS_CODES.OK || 200).json({
+    message: "Recent events fetched successfully",
+    data: recentEvents,
+  });
+});
+
+export const getUserAttendanceData = asyncHandler(async (req, res, _next) => {
+  const userId = req.user.id;
+  const { startDate, endDate } = req.query;
+
+  // Validate date parameters
+  if (!startDate || !endDate) {
+    throw new ValidationError("Both startDate and endDate are required.");
   }
 
-  const now = new Date();
-  const todayStart = startOfDay(now);
-  const todayEnd = endOfDay(now);
+  const start = startOfDay(new Date(startDate));
+  const end = endOfDay(new Date(endDate));
 
-  // Find all sessions that are active today
-  const todaysSessions = await prisma.session.findMany({
+  // Validate date range
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+    throw new ValidationError("Invalid date format. Use YYYY-MM-DD format.");
+  }
+
+  if (start > end) {
+    throw new ValidationError("startDate cannot be after endDate.");
+  }
+
+  // Fetch user's attendance within the date range
+  const attendances = await prisma.attendance.findMany({
     where: {
-      startDate: {
-        lte: todayEnd,
-      },
-      endDate: {
-        gte: todayStart,
+      userId: parseInt(userId),
+      checkInTime: {
+        gte: start,
+        lte: end,
       },
     },
     include: {
-      event: {
+      session: {
         include: {
-          location: true,
-        },
-      },
-      attendances: {
-        where: {
-          userId: parseInt(userId),
+          event: {
+            select: {
+              title: true,
+              isRecurring: true,
+            },
+          },
         },
       },
     },
     orderBy: {
-      startDate: "asc",
+      checkInTime: "asc",
     },
   });
 
-  if (todaysSessions.length === 0) {
-    return res.status(HTTP_STATUS_CODES.OK || 200).json({
-      message: "No events scheduled for today.",
-      data: [],
-    });
-  }
+  const attendanceByDate = {};
 
-  const formattedSessions = todaysSessions.map((session) => {
-    const event = session.event;
-    const [startHour, startMinute] = event.startTime.split(":").map(Number);
-    const [endHour, endMinute] = event.endTime.split(":").map(Number);
+  attendances.forEach((attendance) => {
+    const date = format(new Date(attendance.checkInTime), "yyyy-MM-dd");
 
-    const sessionStartTime = new Date(now);
-    sessionStartTime.setHours(startHour, startMinute, 0, 0);
-
-    const sessionEndTime = new Date(now);
-    sessionEndTime.setHours(endHour, endMinute, 0, 0);
-
-    let status = "upcoming";
-    let countdownMs = null;
-
-    if (now < sessionStartTime) {
-      status = "upcoming";
-      countdownMs = differenceInMilliseconds(sessionStartTime, now);
-    } else if (now >= sessionStartTime && now <= sessionEndTime) {
-      status = "active";
-      countdownMs = 0;
-    } else {
-      status = "ended";
-      countdownMs = 0;
+    if (!attendanceByDate[date]) {
+      attendanceByDate[date] = {
+        date,
+        total: 0,
+        present: 0,
+        late: 0,
+        absent: 0,
+        recurringEvents: 0,
+        nonRecurringEvents: 0,
+        events: [],
+      };
     }
 
-    const hasCheckedIn = session.attendances.length > 0;
+    attendanceByDate[date].total++;
 
-    return {
-      sessionId: session.id,
-      eventId: event.id,
-      eventTitle: event.title,
-      eventDescription: event.description,
-      eventType: event.type,
-      location: {
-        id: event.location.id,
-        name: event.location.name,
-        latitude: event.location.latitude,
-        longitude: event.location.longitude,
-        city: event.location.city,
-        country: event.location.country,
-      },
-      sessionStartDate: session.startDate,
-      sessionEndDate: session.endDate,
-      sessionTime: {
-        startTime: event.startTime,
-        endTime: event.endTime,
-        formattedTime: `${event.startTime} – ${event.endTime}`,
-      },
-      status: status,
-      countdownMs: countdownMs,
-      hasCheckedIn: hasCheckedIn,
-      attendanceStatus: hasCheckedIn ? session.attendances[0].status : null,
-    };
+    // Count by status
+    if (attendance.status === "PRESENT") {
+      attendanceByDate[date].present++;
+    } else if (attendance.status === "LATE") {
+      attendanceByDate[date].late++;
+    } else if (attendance.status === "ABSENT") {
+      attendanceByDate[date].absent++;
+    }
+
+    // Count by event type
+    if (attendance.session.event.isRecurring) {
+      attendanceByDate[date].recurringEvents++;
+    } else {
+      attendanceByDate[date].nonRecurringEvents++;
+    }
+
+    // Track unique events
+    if (
+      !attendanceByDate[date].events.includes(attendance.session.event.title)
+    ) {
+      attendanceByDate[date].events.push(attendance.session.event.title);
+    }
   });
+
+  // Convert to array and sort by date
+  const attendanceData = Object.values(attendanceByDate).sort(
+    (a, b) => new Date(a.date) - new Date(b.date)
+  );
+
+  // Calculate summary statistics
+  const summary = {
+    totalAttendances: attendances.length,
+    dateRange: {
+      from: format(start, "yyyy-MM-dd"),
+      to: format(end, "yyyy-MM-dd"),
+    },
+    statusBreakdown: {
+      present: attendances.filter((a) => a.status === "PRESENT").length,
+      late: attendances.filter((a) => a.status === "LATE").length,
+      absent: attendances.filter((a) => a.status === "ABSENT").length,
+    },
+    eventTypeBreakdown: {
+      recurring: attendances.filter((a) => a.session.event.isRecurring).length,
+      nonRecurring: attendances.filter((a) => !a.session.event.isRecurring)
+        .length,
+    },
+  };
 
   res.status(HTTP_STATUS_CODES.OK || 200).json({
-    message: "Today's events successfully fetched.",
-    data: formattedSessions,
+    message: "User attendance data fetched successfully",
+    data: {
+      summary,
+      attendanceByDate: attendanceData,
+    },
   });
 });
-
-export const getRecentEventAttendanceSummary = asyncHandler(
-  async (req, res, _next) => {
-    const userId = req.user.id;
-
-    const user = await prisma.user.findUnique({
-      where: { id: parseInt(userId) },
-    });
-
-    if (!user) {
-      throw new NotFoundError(`User with ID ${userId} not found.`);
-    }
-
-    const recentAttendance = await prisma.attendance.findFirst({
-      where: {
-        userId: parseInt(userId),
-      },
-      orderBy: {
-        checkInTime: "desc",
-      },
-      include: {
-        session: {
-          include: {
-            event: {
-              include: {
-                location: true,
-              },
-            },
-          },
-        },
-      },
-    });
-
-    if (!recentAttendance) {
-      return res.status(HTTP_STATUS_CODES.OK || 200).json({
-        message: "No attendance records found for this user.",
-        data: null,
-      });
-    }
-
-    const eventId = recentAttendance.session.event.id;
-
-    const eventAttendances = await prisma.attendance.findMany({
-      where: {
-        userId: parseInt(userId),
-        session: {
-          eventId: eventId,
-        },
-      },
-      include: {
-        session: true,
-      },
-    });
-
-    const totalSessions = eventAttendances.length;
-    const presentCount = eventAttendances.filter(
-      (att) => att.status === "PRESENT"
-    ).length;
-    const lateCount = eventAttendances.filter(
-      (att) => att.status === "LATE"
-    ).length;
-    const absentCount = eventAttendances.filter(
-      (att) => att.status === "ABSENT"
-    ).length;
-
-    const attendedCount = presentCount + lateCount;
-    const attendancePercentage =
-      totalSessions > 0 ? Math.round((attendedCount / totalSessions) * 100) : 0;
-
-    res.status(HTTP_STATUS_CODES.OK || 200).json({
-      message: "Attendance summary for most recent event fetched successfully.",
-      data: {
-        event: {
-          id: recentAttendance.session.event.id,
-          title: recentAttendance.session.event.title,
-          description: recentAttendance.session.event.description,
-          type: recentAttendance.session.event.type,
-          location: recentAttendance.session.event.location,
-        },
-        summary: {
-          totalSessions: totalSessions,
-          attended: attendedCount,
-          present: presentCount,
-          late: lateCount,
-          absent: absentCount,
-          attendancePercentage: attendancePercentage,
-        },
-      },
-    });
-  }
-);
-
-export const getLastFiveEventsAttended = asyncHandler(
-  async (req, res, _next) => {
-    const userId = req.user.id;
-
-    const user = await prisma.user.findUnique({
-      where: { id: parseInt(userId) },
-    });
-
-    if (!user) {
-      throw new NotFoundError(`User with ID ${userId} not found.`);
-    }
-
-    const recentAttendances = await prisma.attendance.findMany({
-      where: {
-        userId: parseInt(userId),
-      },
-      orderBy: {
-        checkInTime: "desc",
-      },
-      include: {
-        session: {
-          include: {
-            event: {
-              include: {
-                location: true,
-              },
-            },
-          },
-        },
-      },
-      distinct: ["sessionId"],
-    });
-
-    if (recentAttendances.length === 0) {
-      return res.status(HTTP_STATUS_CODES.OK || 200).json({
-        message: "No attendance records found for this user.",
-        data: [],
-      });
-    }
-
-    const eventMap = new Map();
-
-    for (const attendance of recentAttendances) {
-      const eventId = attendance.session.event.id;
-
-      if (!eventMap.has(eventId)) {
-        eventMap.set(eventId, {
-          event: attendance.session.event,
-          latestAttendance: attendance,
-        });
-      }
-
-      if (eventMap.size === 5) break;
-    }
-
-    const lastFiveEvents = Array.from(eventMap.values()).map((item) => ({
-      eventId: item.event.id,
-      eventTitle: item.event.title,
-      eventDescription: item.event.description,
-      eventType: item.event.type,
-      location: {
-        id: item.event.location.id,
-        name: item.event.location.name,
-        latitude: item.event.location.latitude,
-        longitude: item.event.location.longitude,
-        city: item.event.location.city,
-        country: item.event.location.country,
-      },
-      latestCheckIn: {
-        attendanceId: item.latestAttendance.id,
-        checkInTime: item.latestAttendance.checkInTime,
-        checkOutTime: item.latestAttendance.checkOutTime,
-        status: item.latestAttendance.status,
-        sessionId: item.latestAttendance.sessionId,
-      },
-      isRecurring: item.event.isRecurring,
-    }));
-
-    res.status(HTTP_STATUS_CODES.OK || 200).json({
-      message: "Last 5 events attended successfully fetched.",
-      data: lastFiveEvents,
-    });
-  }
-);

@@ -2,32 +2,24 @@ import { Router } from "express";
 const router = Router();
 
 import {
-  getSystemOverview,
-  getAttendanceLeaderboard,
-  getRecentEvents,
+  getAdminDashboardTotals,
+  getAllUsersAttendanceData,
 } from "../../controllers/index.js";
 import { authorizeRole } from "../../middleware/authorize-role.js";
 import { authenticateJWT } from "../../middleware/jwt-authentication.js";
 
 router.get(
-  "/analytics/overview",
+  "/totals",
   authenticateJWT,
-  authorizeRole(["ADMIN", "USER"]),
-  getSystemOverview
+  authorizeRole(["ADMIN"]),
+  getAdminDashboardTotals
 );
 
 router.get(
-  "/analytics/leaderboard",
+  "/attendance-data",
   authenticateJWT,
-  authorizeRole(["ADMIN", "USER"]),
-  getAttendanceLeaderboard
-);
-
-router.get(
-  "/analytics/recent-events",
-  authenticateJWT,
-  authorizeRole(["ADMIN", "USER"]),
-  getRecentEvents
+  authorizeRole(["ADMIN"]),
+  getAllUsersAttendanceData
 );
 
 export default router;
