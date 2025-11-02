@@ -14,7 +14,7 @@ import { sessionQueue } from "../jobs/session-queue.js";
 import { startOfDay, addDays } from "date-fns";
 import logger from "../utils/logger.js";
 
-const handleCreateEvent = asyncHandler(async (req, res, next) => {
+const handleCreateEvent = asyncHandler(async (req, res, _next) => {
   const {
     location,
     startDate,
@@ -90,7 +90,7 @@ const handleCreateEvent = asyncHandler(async (req, res, next) => {
     logger.info(error, `❌ Failed to schedule session for event ${event.id}:`);
   }
 
-   res.status(HTTP_STATUS_CODES.CREATED || 201).json({
+  res.status(HTTP_STATUS_CODES.CREATED || 201).json({
     message: "Event created successfully",
     data: event,
   });
@@ -101,7 +101,7 @@ export const createEvent = [
   handleCreateEvent,
 ];
 
-export const handleUpdateEvent = asyncHandler(async (req, res, next) => {
+export const handleUpdateEvent = asyncHandler(async (req, res, _next) => {
   const { eventId } = req.params;
   const {
     location,
@@ -302,7 +302,7 @@ export const updateEvent = [
   handleUpdateEvent,
 ];
 
-export const deleteEvent = asyncHandler(async (req, res, next) => {
+export const deleteEvent = asyncHandler(async (req, res, _next) => {
   const { eventId } = req.params;
 
   if (!eventId || isNaN(parseInt(eventId))) {
@@ -324,14 +324,14 @@ export const deleteEvent = asyncHandler(async (req, res, next) => {
   res.status(200).json({ message: "Event deleted successfully." });
 });
 
-export const deleteAllEvents = asyncHandler(async (req, res, next) => {
+export const deleteAllEvents = asyncHandler(async (req, res, _next) => {
   const eventsCount = await prisma.event.count();
 
   if (eventsCount === 0) {
     return res.status(200).json({ message: "No events to delete." });
   }
 
-  if (userCount === 0) {
+  if (eventsCount === 0) {
     return res.status(HTTP_STATUS_CODES.OK || 200).json({
       message: "No events to delete.",
       data: {
@@ -345,7 +345,7 @@ export const deleteAllEvents = asyncHandler(async (req, res, next) => {
   res.status(200).json({ message: "All events deleted successfully." });
 });
 
-export const getEventById = asyncHandler(async (req, res, next) => {
+export const getEventById = asyncHandler(async (req, res, _next) => {
   const { eventId } = req.params;
 
   if (!eventId || isNaN(parseInt(eventId))) {
@@ -366,7 +366,7 @@ export const getEventById = asyncHandler(async (req, res, next) => {
   res.status(200).json({ message: "Event successfully fetched.", data: event });
 });
 
-export const getAllEvents = asyncHandler(async (req, res, next) => {
+export const getAllEvents = asyncHandler(async (req, res, _next) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 10;
   const skip = (page - 1) * limit;

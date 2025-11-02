@@ -9,7 +9,7 @@ import {
 import { faceScanValidation } from "../validation/face-scan-validation.js";
 import { validationMiddleware } from "../validation/validation-error-handler.js";
 
-const handleAddFaceScan = asyncHandler(async (req, res, next) => {
+const handleAddFaceScan = asyncHandler(async (req, res, _next) => {
   const { faceScan } = req.body;
   const userId = req.user.id;
 
@@ -57,7 +57,7 @@ export const addFaceScan = [
   handleAddFaceScan,
 ];
 
-export const getUserFaceScan = asyncHandler(async (req, res, next) => {
+export const getUserFaceScan = asyncHandler(async (req, res, _next) => {
   const { userId } = req.params;
   const currentUserId = req.user.id;
   const currentUserRole = req.user.role;
@@ -97,7 +97,7 @@ export const getUserFaceScan = asyncHandler(async (req, res, next) => {
   });
 });
 
-export const deleteUserFaceScan = asyncHandler(async (req, res, next) => {
+export const deleteUserFaceScan = asyncHandler(async (req, res, _next) => {
   const { userId } = req.params;
 
   if (!userId || isNaN(parseInt(userId))) {

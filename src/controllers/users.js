@@ -6,12 +6,14 @@ import {
   NotFoundError,
   ConflictError,
   ForbiddenError,
+  BadRequestError,
 } from "../middleware/error-handler.js";
 import { HTTP_STATUS_CODES, BCRYPT_SALT_ROUNDS } from "../config/constants.js";
 import { validationMiddleware } from "../validation/validation-error-handler.js";
 import { addUserValidation } from "../validation/users-validation.js";
+import bcrypt from "bcrypt";
 
-export const handleAddUser = asyncHandler(async (req, res, next) => {
+export const handleAddUser = asyncHandler(async (req, res, _next) => {
   const { firstName, lastName, email, password, phone, role } = req.body;
 
   const existingUserByEmail = await prisma.user.findUnique({
@@ -42,7 +44,6 @@ export const handleAddUser = asyncHandler(async (req, res, next) => {
       password: hashedPassword,
       phone: phone || null,
       role: role || "USER",
-      profilePicture: profilePicture || null,
     },
     select: {
       id: true,
@@ -69,7 +70,7 @@ export const addUser = [
   handleAddUser,
 ];
 
-export const updateUserProfile = asyncHandler(async (req, res, next) => {
+export const updateUserProfile = asyncHandler(async (req, res, _next) => {
   const { userId } = req.params;
   const currentUserId = req.user?.id;
   const currentUserRole = req.user?.role;
@@ -132,7 +133,7 @@ export const updateUserProfile = asyncHandler(async (req, res, next) => {
     data: updateData,
   });
 
-  const { password, ...userWithoutPassword } = updatedUser;
+  const { _password, ...userWithoutPassword } = updatedUser;
 
   res.status(HTTP_STATUS_CODES.OK).json({
     message: "Profile updated successfully.",
@@ -140,7 +141,7 @@ export const updateUserProfile = asyncHandler(async (req, res, next) => {
   });
 });
 
-export const updateUserRole = asyncHandler(async (req, res, next) => {
+export const updateUserRole = asyncHandler(async (req, res, _next) => {
   const { userId } = req.params;
   const { role } = req.body;
 
@@ -194,7 +195,7 @@ export const updateUserRole = asyncHandler(async (req, res, next) => {
 });
 
 // Get User By ID
-export const getUserById = asyncHandler(async (req, res, next) => {
+export const getUserById = asyncHandler(async (req, res, _next) => {
   const { userId } = req.params;
   const currentUserId = req.user.id;
   const currentUserRole = req.user.role;
@@ -240,7 +241,7 @@ export const getUserById = asyncHandler(async (req, res, next) => {
   });
 });
 
-export const getAllUsers = asyncHandler(async (req, res, next) => {
+export const getAllUsers = asyncHandler(async (req, res, _next) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 10;
   const skip = (page - 1) * limit;
@@ -310,7 +311,7 @@ export const getAllUsers = asyncHandler(async (req, res, next) => {
   });
 });
 
-export const deleteUser = asyncHandler(async (req, res, next) => {
+export const deleteUser = asyncHandler(async (req, res, _next) => {
   const { userId } = req.params;
 
   if (!userId || isNaN(parseInt(userId))) {
@@ -334,7 +335,7 @@ export const deleteUser = asyncHandler(async (req, res, next) => {
   }
 
   await prisma.user.delete({
-    where: { id: parseInt(id) },
+    where: { id: parseInt(userId) },
   });
 
   return res.status(200).json({
@@ -343,7 +344,7 @@ export const deleteUser = asyncHandler(async (req, res, next) => {
 });
 
 // Delete All Users
-export const deleteAllUsers = asyncHandler(async (req, res, next) => {
+export const deleteAllUsers = asyncHandler(async (req, res, _next) => {
   const currentUserId = req.user.id;
 
   const userCount = await prisma.user.count();

@@ -7,7 +7,7 @@ import { validationMiddleware } from "../validation/validation-error-handler.js"
 import { loginValidation } from "../validation/auth.js";
 import { asyncHandler } from "../middleware/error-handler.js";
 
-const handleLogin = asyncHandler(async (req, res, next) => {
+const handleLogin = asyncHandler(async (req, res, _next) => {
   const { email, password } = req.body;
 
   const user = await prisma.user.findUnique({
@@ -42,7 +42,7 @@ const handleLogin = asyncHandler(async (req, res, next) => {
     }
   );
 
-  const { password: userPassword, ...userWithoutPassword } = user;
+  const { password: _userPassword, ...userWithoutPassword } = user;
 
   res.json({
     message: "Login successful",

@@ -80,7 +80,7 @@ const sanitizeErrorData = (data) => {
 /**
  * Error handler middleware
  */
-export const errorHandler = (error, req, res, next) => {
+export const errorHandler = (error, req, res, _next) => {
   const isProduction = ENV.NODE_ENV === "production";
   const errorId = generateErrorId();
 

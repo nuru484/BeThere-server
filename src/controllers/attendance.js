@@ -16,7 +16,7 @@ import {
 } from "../validation/attendance-validation.js";
 import { startOfDay } from "date-fns";
 
-const handleCreateAttendance = asyncHandler(async (req, res, next) => {
+const handleCreateAttendance = asyncHandler(async (req, res, _next) => {
   const userId = req.user.id;
   const eventId = req.params.eventId;
   const { latitude, longitude } = req.body;
@@ -172,7 +172,7 @@ export const createAttendance = [
   handleCreateAttendance,
 ];
 
-const handleUpdateAttendance = asyncHandler(async (req, res, next) => {
+const handleUpdateAttendance = asyncHandler(async (req, res, _next) => {
   const userId = req.user.id;
   const eventId = req.params.eventId;
   const { latitude, longitude } = req.body;
@@ -324,7 +324,7 @@ export const updateAttendance = [
   handleUpdateAttendance,
 ];
 
-export const getUserAttendance = asyncHandler(async (req, res, next) => {
+export const getUserAttendance = asyncHandler(async (req, res, _next) => {
   const { userId } = req.params;
   const currentUserId = req.user.id;
   const currentUserRole = req.user.role;
@@ -486,7 +486,7 @@ export const getUserAttendance = asyncHandler(async (req, res, next) => {
   });
 });
 
-export const getEventAttendance = asyncHandler(async (req, res, next) => {
+export const getEventAttendance = asyncHandler(async (req, res, _next) => {
   const { eventId } = req.params;
 
   const page = parseInt(req.query.page) || 1;
@@ -617,7 +617,7 @@ export const getEventAttendance = asyncHandler(async (req, res, next) => {
   });
 });
 
-export const getUserEventAttendance = asyncHandler(async (req, res, next) => {
+export const getUserEventAttendance = asyncHandler(async (req, res, _next) => {
   const { userId, eventId } = req.params;
   const currentUserId = req.user.id;
   const currentUserRole = req.user.role;

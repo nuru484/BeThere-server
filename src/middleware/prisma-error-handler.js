@@ -222,9 +222,10 @@ export const handlePrismaError = (error) => {
         return handleNullConstraintError(error);
       case "P2000":
         return handleValueTooLongError(error);
-      default:
+      default: {
         const message =
           PRISMA_ERROR_MESSAGES[error.code] || "Database operation failed";
+
         return new CustomError(400, message, {
           layer: "database",
           severity: ErrorSeverity.MEDIUM,
@@ -234,6 +235,7 @@ export const handlePrismaError = (error) => {
             meta: error.meta,
           },
         });
+      }
     }
   }
 

@@ -34,7 +34,7 @@ export const refreshToken = async (req, res, next) => {
       });
     }
 
-    const { exp, iat, ...cleanedUser } = decodedUser;
+    const { _exp, _iat, ...cleanedUser } = decodedUser;
 
     const newRefreshToken = jwt.sign(cleanedUser, ENV.REFRESH_TOKEN_SECRET, {
       expiresIn: "7d",
