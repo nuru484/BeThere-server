@@ -249,7 +249,7 @@ Deployed on **Render** with the following configuration:
 | **File Storage** | Cloudinary              |
 | **Logs**         | pino + Render Dashboard |
 
-> 🧠 **Note:** Worker process is deployed separately using Render background workers to handle job queues efficiently.
+> **Note:** Worker process is deployed separately using Render background workers to handle job queues efficiently.
 
 ---
 
@@ -267,7 +267,7 @@ Please ensure your code follows the project's style guidelines and includes appr
 
 For major changes, please open an issue first to discuss what you would like to change.
 
-📩 Questions or suggestions?
+Questions or suggestions?
 **[abdulmajeednurudeen47@gmail.com](mailto:abdulmajeednurudeen47@gmail.com)**
 
 ---
@@ -300,6 +300,10 @@ SOFTWARE.
 
 ## 🧠 Author
 
-* **Developer:** Nurudeen Abdul-Majeed
-* **Email:** [abdulmajeednurudeen47@gmail.com](mailto:abdulmajeednurudeen47@gmail.com)
+**Developer:** Nurudeen Abdul-Majeed  
 
+**Email:** [abdulmajeednurudeen47@gmail.com](mailto:abdulmajeednurudeen47@gmail.com)  
+
+**Backend API:** [BeThere Frontend](https://github.com/nuru484/BeThere-client.git)
+
+---
