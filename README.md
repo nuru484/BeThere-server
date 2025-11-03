@@ -1,7 +1,7 @@
 # <img src="public/assets/logo.png" alt="BeThere Logo" width="35" style="vertical-align: middle;"/> BeThere – Smart Attendance System Backend
 
 **BeThere** is an intelligent attendance tracking backend built for modern organizations and event systems.
-It powers the **BeThere client site** — handling authentication, event scheduling, and real-time face-based attendance verification.
+It powers the **BeThere client site**,  handling authentication, event scheduling, and real-time face-based attendance verification.
 
 With built-in **geolocation validation**, **background job automation**, and **facial scan matching**, BeThere ensures that attendance records are secure, accurate, and location-verified.
 
