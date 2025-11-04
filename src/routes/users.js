@@ -42,9 +42,9 @@ router.delete(
   "/:userId",
   authenticateJWT,
   authorizeRole(["ADMIN"]),
-  deleteAllUsers
+  deleteUser
 );
 
-router.delete("/", authenticateJWT, authorizeRole(["ADMIN"]), deleteUser);
+router.delete("/", authenticateJWT, authorizeRole(["ADMIN"]), deleteAllUsers);
 
 export default router;
