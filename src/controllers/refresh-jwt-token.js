@@ -34,15 +34,21 @@ export const refreshToken = async (req, res, next) => {
       });
     }
 
-    const { _exp, _iat, ...cleanedUser } = decodedUser;
+    const newRefreshToken = jwt.sign(
+      { id: decodedUser.id, role: decodedUser.role },
+      ENV.REFRESH_TOKEN_SECRET,
+      {
+        expiresIn: "7d",
+      }
+    );
 
-    const newRefreshToken = jwt.sign(cleanedUser, ENV.REFRESH_TOKEN_SECRET, {
-      expiresIn: "7d",
-    });
-
-    const newAccessToken = jwt.sign(cleanedUser, ENV.ACCESS_TOKEN_SECRET, {
-      expiresIn: "30s",
-    });
+    const newAccessToken = jwt.sign(
+      { id: decodedUser.id, role: decodedUser.role },
+      ENV.ACCESS_TOKEN_SECRET,
+      {
+        expiresIn: "30s",
+      }
+    );
 
     req.user = decodedUser;
 

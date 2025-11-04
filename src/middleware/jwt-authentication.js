@@ -5,8 +5,14 @@ import { verifyJwtToken } from "../utils/verify-jwt-token.js";
 export const authenticateJWT = async (req, res, next) => {
   const authHeader = req.headers.authorization;
 
+  console.log("Request Headers: ", req.headers);
+
+  console.log("auth header: ", authHeader);
+
   if (!authHeader) {
-    return res.status(401).json({ message: "Authorization header missing" });
+    return res
+      .status(401)
+      .json({ message: "Authorization header missing HERE" });
   }
 
   const accessToken = authHeader.split(" ")[1];
@@ -22,6 +28,7 @@ export const authenticateJWT = async (req, res, next) => {
     next();
   } catch (error) {
     if (error.name === "TokenExpiredError") {
+      console.log("Here is the errror!!!");
       return res.status(401).json({
         message: "Refresh token expired. Please log in again.",
         type: "TOKEN_EXPIRED",
