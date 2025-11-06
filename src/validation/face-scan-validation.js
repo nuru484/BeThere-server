@@ -7,7 +7,7 @@ export const faceScanValidation = [
     .isArray({ min: 128, max: 128 })
     .withMessage("Face scan must be an array of 128 descriptor values")
     .custom((value) => {
-      const isValid = value.every(
+      const isValid = value?.every(
         (num) => typeof num === "number" && !isNaN(num)
       );
       if (!isValid) {

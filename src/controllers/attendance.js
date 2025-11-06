@@ -174,7 +174,7 @@ export const createAttendance = [
 
 const handleUpdateAttendance = asyncHandler(async (req, res, _next) => {
   const userId = req.user.id;
-  const eventId = req.params.eventId;
+  const { eventId } = req.params;
   const { latitude, longitude } = req.body;
 
   if (!eventId || isNaN(parseInt(eventId))) {

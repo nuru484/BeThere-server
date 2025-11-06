@@ -27,21 +27,21 @@ router.put(
 );
 
 router.get(
-  "/user/:userId",
+  "/users/:userId",
   authenticateJWT,
   authorizeRole(["ADMIN", "USER"]),
   getUserAttendance
 );
 
 router.get(
-  "/event/:eventId",
+  "/events/:eventId",
   authenticateJWT,
   authorizeRole(["ADMIN"]),
   getEventAttendance
 );
 
 router.get(
-  "/user/:userId/event/:eventId",
+  "/users/:userId/events/:eventId",
   authenticateJWT,
   authorizeRole(["ADMIN", "USER"]),
   getUserEventAttendance
