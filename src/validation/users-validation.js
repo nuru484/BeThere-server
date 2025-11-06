@@ -4,7 +4,7 @@ export const addUserValidation = [
   body("firstName")
     .exists({ checkFalsy: true })
     .withMessage("First name is required")
-    .isLength({ min: 2 })
+    .isLength({ min: 2, max: 100 })
     .withMessage("First name must be at least 2 characters long")
     .trim()
     .escape(),
@@ -12,7 +12,7 @@ export const addUserValidation = [
   body("lastName")
     .exists({ checkFalsy: true })
     .withMessage("Last name is required")
-    .isLength({ min: 2 })
+    .isLength({ min: 2, max: 100 })
     .withMessage("Last name must be at least 2 characters long")
     .trim()
     .escape(),
