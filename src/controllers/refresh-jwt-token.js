@@ -46,7 +46,7 @@ export const refreshToken = async (req, res, next) => {
       { id: decodedUser.id, role: decodedUser.role },
       ENV.ACCESS_TOKEN_SECRET,
       {
-        expiresIn: "30s",
+        expiresIn: "30m",
       }
     );
 

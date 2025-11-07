@@ -30,7 +30,7 @@ const handleLogin = asyncHandler(async (req, res, _next) => {
     { id: user.id, role: user.role },
     ENV.ACCESS_TOKEN_SECRET,
     {
-      expiresIn: "30s",
+      expiresIn: "30m",
     }
   );
 
@@ -43,6 +43,8 @@ const handleLogin = asyncHandler(async (req, res, _next) => {
   );
 
   const { password: _userPassword, ...userWithoutPassword } = user;
+
+  console.log(userWithoutPassword);
 
   res.json({
     message: "Login successful",
