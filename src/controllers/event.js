@@ -363,7 +363,6 @@ export const getEventById = asyncHandler(async (req, res, _next) => {
     throw new NotFoundError(`Event with ID ${eventId} not found.`);
   }
 
-  console.log("Event Requested: ", event);
   res.status(200).json({ message: "Event successfully fetched.", data: event });
 });
 
