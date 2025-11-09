@@ -42,6 +42,33 @@ export const addUserValidation = [
     .withMessage("Role must be either ADMIN or USER"),
 ];
 
+export const updateUserProfileValidation = [
+  body("firstName")
+    .optional({ nullable: true })
+    .isLength({ min: 2, max: 100 })
+    .withMessage("First name must be at least 2 characters long")
+    .trim()
+    .escape(),
+
+  body("lastName")
+    .optional({ nullable: true })
+    .isLength({ min: 2, max: 100 })
+    .withMessage("Last name must be at least 2 characters long")
+    .trim()
+    .escape(),
+
+  body("email")
+    .optional({ nullable: true })
+    .isEmail()
+    .withMessage("Invalid email format")
+    .normalizeEmail(),
+
+  body("phone")
+    .optional({ nullable: true })
+    .isMobilePhone()
+    .withMessage("Invalid phone number"),
+];
+
 export const changePasswordValidation = [
   body("currentPassword")
     .exists({ checkFalsy: true })

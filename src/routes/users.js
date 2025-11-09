@@ -20,7 +20,7 @@ router.put(
   "/:userId",
   authenticateJWT,
   authorizeRole(["ADMIN", "USER"]),
-  updateUserProfile
+  ...updateUserProfile
 );
 
 router.patch(

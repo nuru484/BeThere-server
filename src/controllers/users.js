@@ -13,6 +13,7 @@ import { validationMiddleware } from "../validation/validation-error-handler.js"
 import {
   addUserValidation,
   changePasswordValidation,
+  updateUserProfileValidation,
 } from "../validation/users-validation.js";
 import bcrypt from "bcrypt";
 
@@ -73,7 +74,7 @@ export const addUser = [
   handleAddUser,
 ];
 
-export const updateUserProfile = asyncHandler(async (req, res, _next) => {
+export const handleUpdateUserProfile = asyncHandler(async (req, res, _next) => {
   const { userId } = req.params;
   const currentUserId = req.user?.id;
   const currentUserRole = req.user?.role;
@@ -143,6 +144,11 @@ export const updateUserProfile = asyncHandler(async (req, res, _next) => {
     data: userWithoutPassword,
   });
 });
+
+export const updateUserProfile = [
+  validationMiddleware.create(updateUserProfileValidation),
+  handleUpdateUserProfile,
+];
 
 export const updateUserRole = asyncHandler(async (req, res, _next) => {
   const { userId } = req.params;
