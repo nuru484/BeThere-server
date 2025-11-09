@@ -41,3 +41,27 @@ export const addUserValidation = [
     .isIn(["ADMIN", "USER"])
     .withMessage("Role must be either ADMIN or USER"),
 ];
+
+export const changePasswordValidation = [
+  body("currentPassword")
+    .exists({ checkFalsy: true })
+    .withMessage("Current password is required")
+    .isLength({ min: 4, max: 255 })
+    .withMessage("Current password must be at least 4 characters long")
+    .trim(),
+
+  body("newPassword")
+    .exists({ checkFalsy: true })
+    .withMessage("New password is required")
+    .isLength({ min: 6, max: 255 })
+    .withMessage("New password must be at least 6 characters long")
+    .matches(/[A-Z]/)
+    .withMessage("New password must contain at least one uppercase letter")
+    .matches(/[a-z]/)
+    .withMessage("New password must contain at least one lowercase letter")
+    .matches(/[0-9]/)
+    .withMessage("New password must contain at least one number")
+    .matches(/[^A-Za-z0-9]/)
+    .withMessage("New password must contain at least one special character")
+    .trim(),
+];

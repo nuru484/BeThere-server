@@ -10,7 +10,10 @@ import {
 } from "../middleware/error-handler.js";
 import { HTTP_STATUS_CODES, BCRYPT_SALT_ROUNDS } from "../config/constants.js";
 import { validationMiddleware } from "../validation/validation-error-handler.js";
-import { addUserValidation } from "../validation/users-validation.js";
+import {
+  addUserValidation,
+  changePasswordValidation,
+} from "../validation/users-validation.js";
 import bcrypt from "bcrypt";
 
 export const handleAddUser = asyncHandler(async (req, res, _next) => {
@@ -373,3 +376,50 @@ export const deleteAllUsers = asyncHandler(async (req, res, _next) => {
     },
   });
 });
+
+const handleChangePassword = asyncHandler(async (req, res, _next) => {
+  const userId = req.user?.id;
+  const { currentPassword, newPassword } = req.body;
+
+  if (!userId) {
+    res.status(HTTP_STATUS_CODES.UNAUTHORIZED);
+    throw new Error("Unauthorized - user not logged in");
+  }
+
+  if (currentPassword === newPassword) {
+    res.status(HTTP_STATUS_CODES.BAD_REQUEST);
+    throw new Error("New password cannot be the same as current password");
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { password: true },
+  });
+
+  if (!user) {
+    res.status(HTTP_STATUS_CODES.NOT_FOUND);
+    throw new Error("User not found");
+  }
+
+  const isMatch = await bcrypt.compare(currentPassword, user.password);
+  if (!isMatch) {
+    res.status(HTTP_STATUS_CODES.BAD_REQUEST);
+    throw new Error("Current password is incorrect");
+  }
+
+  const hashedNewPassword = await bcrypt.hash(newPassword, BCRYPT_SALT_ROUNDS);
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: { password: hashedNewPassword },
+  });
+
+  res.status(HTTP_STATUS_CODES.OK).json({
+    message: "Password updated successfully",
+  });
+});
+
+export const changePassword = [
+  ...validationMiddleware.create(changePasswordValidation),
+  handleChangePassword,
+];

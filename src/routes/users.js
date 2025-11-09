@@ -9,6 +9,7 @@ import {
   getAllUsers,
   deleteUser,
   deleteAllUsers,
+  changePassword,
 } from "../controllers/index.js";
 import { authorizeRole } from "../middleware/authorize-role.js";
 import { authenticateJWT } from "../middleware/jwt-authentication.js";
@@ -43,6 +44,13 @@ router.delete(
   authenticateJWT,
   authorizeRole(["ADMIN"]),
   deleteUser
+);
+
+router.patch(
+  "/change-password",
+  authenticateJWT,
+  authorizeRole(["ADMIN", "USER"]),
+  ...changePassword
 );
 
 router.delete("/", authenticateJWT, authorizeRole(["ADMIN"]), deleteAllUsers);
