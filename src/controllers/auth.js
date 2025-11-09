@@ -44,8 +44,6 @@ const handleLogin = asyncHandler(async (req, res, _next) => {
 
   const { password: _userPassword, ...userWithoutPassword } = user;
 
-  console.log(userWithoutPassword);
-
   res.json({
     message: "Login successful",
     accessToken,
