@@ -137,10 +137,41 @@ export const handleUpdateEvent = asyncHandler(async (req, res, _next) => {
   const eventEndDate = existingEvent.endDate || existingEvent.startDate;
   const hasEventPassed = new Date(eventEndDate) < currentDate;
 
-  if (!existingEvent.isRecurring && hasEventPassed && !isRecurring) {
-    throw new ValidationError(
-      "Cannot update a non-recurring event that has already passed. Set isRecurring to true to convert it to a recurring event."
-    );
+  const hasAttendance = await prisma.attendance.count({
+    where: {
+      session: {
+        eventId: parseInt(eventId),
+      },
+    },
+  });
+
+  if (startDate && hasAttendance > 0) {
+    const existingStartDate = new Date(existingEvent.startDate);
+    const newStartDateParsed = new Date(startDate);
+
+    if (existingStartDate.getTime() !== newStartDateParsed.getTime()) {
+      throw new ValidationError(
+        "Cannot update the start date of an event that already has attendance records."
+      );
+    }
+  }
+
+  if (!existingEvent.isRecurring && hasEventPassed) {
+    if (isRecurring === true) {
+      if (
+        startDate &&
+        new Date(startDate).getTime() !==
+          new Date(existingEvent.startDate).getTime()
+      ) {
+        throw new ValidationError(
+          "Cannot update the start date when converting a past non-recurring event to recurring. You can only change the recurring settings."
+        );
+      }
+    } else {
+      throw new ValidationError(
+        "Cannot update a non-recurring event that has already passed. Set isRecurring to true to convert it to a recurring event."
+      );
+    }
   }
 
   let calculatedDuration = durationDays;
