@@ -348,6 +348,20 @@ export const deleteEvent = asyncHandler(async (req, res, _next) => {
     throw new NotFoundError(`Event with ID ${eventId} not found.`);
   }
 
+  const hasAttendance = await prisma.attendance.count({
+    where: {
+      session: {
+        eventId: parseInt(eventId),
+      },
+    },
+  });
+
+  if (hasAttendance > 0) {
+    throw new ValidationError(
+      "Cannot delete an event that has attendance records. Please archive the event instead to preserve historical data."
+    );
+  }
+
   await prisma.event.delete({
     where: { id: parseInt(eventId) },
   });
@@ -359,10 +373,6 @@ export const deleteAllEvents = asyncHandler(async (req, res, _next) => {
   const eventsCount = await prisma.event.count();
 
   if (eventsCount === 0) {
-    return res.status(200).json({ message: "No events to delete." });
-  }
-
-  if (eventsCount === 0) {
     return res.status(HTTP_STATUS_CODES.OK || 200).json({
       message: "No events to delete.",
       data: {
@@ -371,9 +381,38 @@ export const deleteAllEvents = asyncHandler(async (req, res, _next) => {
     });
   }
 
-  await prisma.event.deleteMany({});
+  const eventsWithAttendance = await prisma.event.findMany({
+    where: {
+      sessions: {
+        some: {
+          attendances: {
+            some: {},
+          },
+        },
+      },
+    },
+    select: {
+      id: true,
+      title: true,
+    },
+  });
 
-  res.status(200).json({ message: "All events deleted successfully." });
+  if (eventsWithAttendance.length > 0) {
+    throw new ValidationError(
+      eventsWithAttendance.length === 1
+        ? `"${eventsWithAttendance[0].title}" has attendance. Archive instead of deleting.`
+        : `${eventsWithAttendance.length} events have attendance. Archive instead of deleting.`
+    );
+  }
+
+  const result = await prisma.event.deleteMany({});
+
+  res.status(HTTP_STATUS_CODES.OK || 200).json({
+    message: "All events deleted successfully.",
+    data: {
+      deletedCount: result.count,
+    },
+  });
 });
 
 export const getEventById = asyncHandler(async (req, res, _next) => {
