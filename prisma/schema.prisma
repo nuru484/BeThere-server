@@ -40,6 +40,7 @@ model Event {
   durationDays       Int       @default(1) // How many days each occurrence lasts
   startTime          String // When attendance opens (e.g., "06:00")
   endTime            String // When attendance closes (e.g., "19:30")
+  archived           Boolean   @default(false) // Archive status
 
   location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   locationId Int
