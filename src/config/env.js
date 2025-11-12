@@ -42,6 +42,8 @@ const ENV = {
   ),
 
   REDIS_URL: assertEnv(process.env.REDIS_URL, "REDIS_URL"),
+
+  FRONTEND_URL: assertEnv(process.env.FRONTEND_URL, "FRONTEND_URL"),
 };
 
 export default ENV;
