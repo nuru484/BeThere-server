@@ -172,7 +172,7 @@ async function main() {
   const now = new Date();
   const today = startOfDay(now);
 
-  // Past Event (completed)
+  // Past Event (completed) - ONE-TIME EVENT
   const pastEvent = await prisma.event.create({
     data: {
       title: "Annual Tech Conference 2024",
@@ -190,7 +190,7 @@ async function main() {
     },
   });
 
-  // Current Event (ongoing)
+  // Current Event (ongoing) - ONE-TIME EVENT
   const currentEvent = await prisma.event.create({
     data: {
       title: "Web Development Workshop",
@@ -208,7 +208,7 @@ async function main() {
     },
   });
 
-  // Recurring Event (weekly training)
+  // Recurring Event (weekly training) - RECURRING EVENT
   const recurringEvent = await prisma.event.create({
     data: {
       title: "Weekly Team Meeting",
@@ -225,7 +225,7 @@ async function main() {
     },
   });
 
-  // Future Event
+  // Future Event - ONE-TIME EVENT
   const futureEvent = await prisma.event.create({
     data: {
       title: "Product Launch Event",
@@ -243,7 +243,7 @@ async function main() {
     },
   });
 
-  // Another Recurring Event (daily standup)
+  // Another Recurring Event (daily standup) - RECURRING EVENT
   const dailyStandup = await prisma.event.create({
     data: {
       title: "Daily Standup",
@@ -270,9 +270,10 @@ async function main() {
   logger.info(`✅ ${events.length} events seeded successfully`);
 
   // ============ SEED SESSIONS ============
-  const sessions = [];
+  const sessionsByEvent = new Map();
 
-  // Past Event Sessions (3 days)
+  // Past Event Sessions (3 days) - ONE-TIME
+  const pastEventSessions = [];
   for (let i = 0; i < 3; i++) {
     const sessionDate = addDays(startOfDay(pastEvent.startDate), i);
     const session = await prisma.session.create({
@@ -284,10 +285,12 @@ async function main() {
         endTime: setMinutes(setHours(sessionDate, 18), 0),
       },
     });
-    sessions.push(session);
+    pastEventSessions.push(session);
   }
+  sessionsByEvent.set(pastEvent.id, pastEventSessions);
 
-  // Current Event Sessions (8 days)
+  // Current Event Sessions (8 days) - ONE-TIME
+  const currentEventSessions = [];
   for (let i = 0; i < 8; i++) {
     const sessionDate = addDays(startOfDay(currentEvent.startDate), i);
     const session = await prisma.session.create({
@@ -299,10 +302,12 @@ async function main() {
         endTime: setMinutes(setHours(sessionDate, 17), 0),
       },
     });
-    sessions.push(session);
+    currentEventSessions.push(session);
   }
+  sessionsByEvent.set(currentEvent.id, currentEventSessions);
 
   // Recurring Event Sessions (weekly for past 2 weeks + current week)
+  const recurringEventSessions = [];
   for (let i = 0; i < 3; i++) {
     const sessionDate = addDays(startOfDay(recurringEvent.startDate), i * 7);
     const session = await prisma.session.create({
@@ -314,10 +319,12 @@ async function main() {
         endTime: setMinutes(setHours(sessionDate, 12), 0),
       },
     });
-    sessions.push(session);
+    recurringEventSessions.push(session);
   }
+  sessionsByEvent.set(recurringEvent.id, recurringEventSessions);
 
-  // Daily Standup Sessions (past 7 days)
+  // Daily Standup Sessions (past 7 days) - RECURRING
+  const dailyStandupSessions = [];
   for (let i = 0; i < 8; i++) {
     const sessionDate = addDays(startOfDay(dailyStandup.startDate), i);
     const session = await prisma.session.create({
@@ -329,10 +336,17 @@ async function main() {
         endTime: setMinutes(setHours(sessionDate, 9), 30),
       },
     });
-    sessions.push(session);
+    dailyStandupSessions.push(session);
   }
+  sessionsByEvent.set(dailyStandup.id, dailyStandupSessions);
 
-  logger.info(`✅ ${sessions.length} sessions seeded successfully`);
+  const totalSessions =
+    pastEventSessions.length +
+    currentEventSessions.length +
+    recurringEventSessions.length +
+    dailyStandupSessions.length;
+
+  logger.info(`✅ ${totalSessions} sessions seeded successfully`);
 
   // ============ SEED ATTENDANCE RECORDS ============
   const attendanceRecords = [];
@@ -345,7 +359,13 @@ async function main() {
     checkInDelay = 0,
     hasCheckOut = true
   ) => {
-    const session = sessions.find((s) => s.id === sessionId);
+    const allSessions = [
+      ...pastEventSessions,
+      ...currentEventSessions,
+      ...recurringEventSessions,
+      ...dailyStandupSessions,
+    ];
+    const session = allSessions.find((s) => s.id === sessionId);
     if (!session) return null;
 
     const checkInTime = new Date(session.startTime);
@@ -364,89 +384,73 @@ async function main() {
     });
   };
 
-  // Create attendance for past event sessions (all users attended)
-  for (const session of sessions.slice(0, 3)) {
-    for (const user of users) {
-      const attendance = await createAttendance(
-        user.id,
-        session.id,
-        AttendanceStatus.PRESENT,
-        Math.floor(Math.random() * 30), // Random check-in within 30 minutes
-        true
-      );
-      if (attendance) attendanceRecords.push(attendance);
-    }
+  // ============ ONE-TIME EVENT: Past Event (only ONE attendance per user) ============
+  // Each user can only attend the FIRST session of this one-time event
+  const pastFirstSession = pastEventSessions[0];
+  for (const user of users) {
+    const attendance = await createAttendance(
+      user.id,
+      pastFirstSession.id,
+      AttendanceStatus.PRESENT,
+      Math.floor(Math.random() * 30),
+      true
+    );
+    if (attendance) attendanceRecords.push(attendance);
   }
 
-  // Create attendance for current event sessions (varied attendance)
-  for (let i = 0; i < 5; i++) {
-    const session = sessions[3 + i];
-    if (!session) continue;
+  // ============ ONE-TIME EVENT: Current Event (only ONE attendance per user) ============
+  // Each user can only attend the FIRST session of this one-time ongoing event
+  const currentFirstSession = currentEventSessions[0];
 
-    // User 1: Always present and on time
-    attendanceRecords.push(
-      await createAttendance(
-        users[0].id,
-        session.id,
-        AttendanceStatus.PRESENT,
-        10,
-        i < 3
-      )
-    );
+  // User 1: Present
+  attendanceRecords.push(
+    await createAttendance(
+      users[0].id,
+      currentFirstSession.id,
+      AttendanceStatus.PRESENT,
+      10,
+      true
+    )
+  );
 
-    // User 2: Sometimes late
-    attendanceRecords.push(
-      await createAttendance(
-        users[1].id,
-        session.id,
-        i % 2 === 0 ? AttendanceStatus.LATE : AttendanceStatus.PRESENT,
-        i % 2 === 0 ? 70 : 20,
-        i < 3
-      )
-    );
+  // User 2: Late
+  attendanceRecords.push(
+    await createAttendance(
+      users[1].id,
+      currentFirstSession.id,
+      AttendanceStatus.LATE,
+      70,
+      true
+    )
+  );
 
-    // User 3: Mix of present and absent
-    if (i % 3 !== 0) {
-      attendanceRecords.push(
-        await createAttendance(
-          users[2].id,
-          session.id,
-          AttendanceStatus.PRESENT,
-          15,
-          i < 3
-        )
-      );
-    }
+  // User 3: Present
+  attendanceRecords.push(
+    await createAttendance(
+      users[2].id,
+      currentFirstSession.id,
+      AttendanceStatus.PRESENT,
+      15,
+      false // Still attending
+    )
+  );
 
-    // User 4: Mostly present
-    if (i !== 4) {
-      attendanceRecords.push(
-        await createAttendance(
-          users[3].id,
-          session.id,
-          AttendanceStatus.PRESENT,
-          25,
-          i < 3
-        )
-      );
-    }
+  // User 4: Present
+  attendanceRecords.push(
+    await createAttendance(
+      users[3].id,
+      currentFirstSession.id,
+      AttendanceStatus.PRESENT,
+      25,
+      false
+    )
+  );
 
-    // User 5: Irregular attendance
-    if (i % 2 === 0) {
-      attendanceRecords.push(
-        await createAttendance(
-          users[4].id,
-          session.id,
-          i === 0 ? AttendanceStatus.LATE : AttendanceStatus.PRESENT,
-          i === 0 ? 80 : 30,
-          i < 2
-        )
-      );
-    }
-  }
+  // User 5: Not attending this event
 
-  // Create attendance for recurring event sessions
-  for (const session of sessions.slice(11, 14)) {
+  // ============ RECURRING EVENT: Weekly Team Meeting (MULTIPLE attendance per user) ============
+  for (const session of recurringEventSessions) {
+    // Each user can attend each session
     for (let i = 0; i < 3; i++) {
       const attendance = await createAttendance(
         users[i].id,
@@ -459,8 +463,8 @@ async function main() {
     }
   }
 
-  // Create attendance for daily standup (varied patterns)
-  for (const session of sessions.slice(14, 21)) {
+  // ============ RECURRING EVENT: Daily Standup (MULTIPLE attendance per user) ============
+  for (const session of dailyStandupSessions) {
     for (const user of users) {
       if (Math.random() > 0.2) {
         // 80% attendance rate
@@ -493,9 +497,18 @@ async function main() {
   );
   logger.info(`   - Locations: ${locations.length}`);
   logger.info(`   - Events: ${events.length}`);
-  logger.info(`   - Sessions: ${sessions.length}`);
+  logger.info(
+    `     • One-time events: 3 (Past Conference, Current Workshop, Future Launch)`
+  );
+  logger.info(`     • Recurring events: 2 (Weekly Meeting, Daily Standup)`);
+  logger.info(`   - Sessions: ${totalSessions}`);
   logger.info(
     `   - Attendance Records: ${attendanceRecords.filter(Boolean).length}`
+  );
+  logger.info("\n🔍 Attendance Pattern:");
+  logger.info(`   - One-time events: Each user has max 1 attendance record`);
+  logger.info(
+    `   - Recurring events: Users can have multiple attendance records`
   );
   logger.info("\n📝 Test User Credentials:");
   logger.info(`   Email: john.doe@example.com | Password: Password123!`);
