@@ -17,6 +17,12 @@ import {
   resetPasswordValidation,
 } from "../validation/password-reset-validation.js";
 
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const handleRequestPasswordReset = asyncHandler(async (req, res, _next) => {
   const { email } = req.body;
 
@@ -75,9 +81,16 @@ const handleRequestPasswordReset = asyncHandler(async (req, res, _next) => {
   try {
     await sendPasswordResetEmail({
       email: user.email,
-      subject: "Password Reset",
+      subject: "Password Reset - BeThere",
       template: "reset-password.ejs",
       data,
+      attachments: [
+        {
+          filename: "logo.png",
+          path: path.join(__dirname, "../../public/assets/logo.png"),
+          cid: "logo", // This matches cid:logo in the email template
+        },
+      ],
     });
   } catch (emailError) {
     logger.error(emailError, "Failed to send password reset email:");
