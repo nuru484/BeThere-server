@@ -8,7 +8,7 @@ import {
 } from "../middleware/error-handler.js";
 import { HTTP_STATUS_CODES, BCRYPT_SALT_ROUNDS } from "../config/constants.js";
 import { validationMiddleware } from "../validation/validation-error-handler.js";
-import { sendPasswordResetEmail } from "../services/email-service.js";
+import sendPasswordResetEmail from "../utils/sendMail.js";
 import ENV from "../config/env.js";
 import logger from "../utils/logger.js";
 import {
@@ -66,12 +66,18 @@ const handleRequestPasswordReset = asyncHandler(async (req, res, _next) => {
 
   const resetLink = `${ENV.FRONTEND_URL}/reset-password?token=${resetToken}`;
 
+  const data = {
+    userFirstName: user.firstName,
+    userLastName: user.lastName,
+    resetLink: resetLink,
+  };
+
   try {
     await sendPasswordResetEmail({
-      to: user.email,
-      firstName: user.firstName,
-      resetLink: resetLink,
-      expiresInMinutes: 15,
+      email: user.email,
+      subject: "Password Reset",
+      template: "reset-password",
+      data,
     });
   } catch (emailError) {
     logger.error(emailError, "Failed to send password reset email:");

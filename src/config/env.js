@@ -44,6 +44,12 @@ const ENV = {
   REDIS_URL: assertEnv(process.env.REDIS_URL, "REDIS_URL"),
 
   FRONTEND_URL: assertEnv(process.env.FRONTEND_URL, "FRONTEND_URL"),
+
+  SMTP_HOST: assertEnv(process.env.SMTP_HOST, "SMTP_HOST"),
+  SMTP_PORT: assertEnv(process.env.SMTP_PORT, "SMTP_PORT"),
+  GMAIL_USER: assertEnv(process.env.GMAIL_USER, "GMAIL_USER"),
+  GMAIL_PASSWORD: assertEnv(process.env.GMAIL_PASSWORD, "GMAIL_PASSWORD"),
+  SMTP_SECURE: assertEnv(process.env.SMTP_SECURE, "SMTP_SECURE"),
 };
 
 export default ENV;

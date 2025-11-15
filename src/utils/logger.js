@@ -1,17 +1,18 @@
 // src/utils/logger.ts
-import pino from 'pino';
+import pino from "pino";
+import ENV from "../config/env.js";
 
-const isProduction = process.env.NODE_ENV === 'production';
+const isProduction = ENV.NODE_ENV === "production";
 
 const logger = pino({
-  level: isProduction ? 'info' : 'debug',
+  level: isProduction ? "info" : "debug",
   transport: {
-    target: 'pino-pretty',
+    target: "pino-pretty",
     options: {
       colorize: true,
       translateTime: true,
       singleLine: false,
-      ignore: '',
+      ignore: "",
     },
   },
 });
