@@ -8,6 +8,7 @@ import refreshTokenRoute from "./refresh-token.js";
 import usersRoutes from "./users.js";
 import faceScanRoutes from "./facescan.js";
 import dashboardRoutes from "./dashboard/index.js";
+import passwordResetRoutes from "./password-reset.js";
 
 routes.use("/auth", authRoutes);
 routes.use("/events", eventRoutes);
@@ -16,5 +17,6 @@ routes.use("/refreshToken", refreshTokenRoute);
 routes.use("/users", usersRoutes);
 routes.use("/facescan", faceScanRoutes);
 routes.use("/dashboard", dashboardRoutes);
+routes.use("/password-reset", passwordResetRoutes);
 
 export default routes;

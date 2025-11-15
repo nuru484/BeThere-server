@@ -76,7 +76,7 @@ const handleRequestPasswordReset = asyncHandler(async (req, res, _next) => {
     await sendPasswordResetEmail({
       email: user.email,
       subject: "Password Reset",
-      template: "reset-password",
+      template: "reset-password.ejs",
       data,
     });
   } catch (emailError) {
