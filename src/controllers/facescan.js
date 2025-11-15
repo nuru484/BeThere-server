@@ -44,10 +44,13 @@ const handleAddFaceScan = asyncHandler(async (req, res, _next) => {
     },
   });
 
+  const { password: _userPassword, ...userWithoutPassword } = updatedUser;
+
   res.status(200).json({
     message: "Face scan added successfully.",
     data: {
       faceScan: updatedUser.faceScan,
+      user: userWithoutPassword,
     },
   });
 });
