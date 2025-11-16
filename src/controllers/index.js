@@ -7,3 +7,4 @@ export * from "./refresh-jwt-token.js";
 export * from "./dashboard/users.js";
 export * from "./dashboard/admin.js";
 export * from "./password-reset.js";
+export * from "./attendance-reports.js";
