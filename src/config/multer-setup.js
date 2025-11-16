@@ -10,6 +10,8 @@ const fileFilter = (req, file, cb) => {
     "image/png",
     "image/jpg",
     "image/webp",
+    "image/heic",
+    "image/heif",
   ];
 
   if (allowedMimeTypes.includes(file.mimetype)) {
@@ -17,7 +19,7 @@ const fileFilter = (req, file, cb) => {
   } else {
     cb(
       new BadRequestError(
-        "Only image files (JPEG, PNG, JPG, WEBP) are allowed."
+        "Only image files (JPEG, PNG, JPG, WEBP, HEIC) are allowed."
       ),
       false
     );
