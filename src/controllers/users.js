@@ -16,6 +16,8 @@ import {
   updateUserProfileValidation,
 } from "../validation/users-validation.js";
 import bcrypt from "bcrypt";
+import { extractPublicIdFromUrl } from "../utils/extractPublicIdFromUrl.js";
+import cloudinary from "cloudinary";
 
 export const handleAddUser = asyncHandler(async (req, res, _next) => {
   const { firstName, lastName, email, password, phone, role } = req.body;
@@ -429,3 +431,88 @@ export const changePassword = [
   ...validationMiddleware.create(changePasswordValidation),
   handleChangePassword,
 ];
+
+export const updateProfilePicture = asyncHandler(async (req, res, _next) => {
+  const { userId } = req.params;
+  const currentUserId = req.user?.id;
+  const currentUserRole = req.user?.role;
+
+  if (!userId || isNaN(parseInt(userId))) {
+    throw new ValidationError("Valid user ID is required.");
+  }
+
+  const targetUserId = parseInt(userId);
+
+  if (
+    targetUserId !== parseInt(currentUserId?.toString() || "0") &&
+    currentUserRole !== "ADMIN"
+  ) {
+    throw new UnauthorizedError(
+      "Only admins can update other users' profile pictures."
+    );
+  }
+
+  if (!req.file) {
+    throw new BadRequestError("Profile picture file is required.");
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: targetUserId },
+    select: { profilePicture: true },
+  });
+
+  if (!user) {
+    throw new NotFoundError("User not found.");
+  }
+
+  if (user.profilePicture) {
+    try {
+      const publicId = extractPublicIdFromUrl(user.profilePicture);
+      await cloudinary.v2.uploader.destroy(publicId);
+    } catch (error) {
+      console.error("Error deleting old profile picture:", error);
+    }
+  }
+
+  const uploadResult = await new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.v2.uploader.upload_stream(
+      {
+        folder: "bethere",
+        width: 150,
+        height: 150,
+        crop: "fill",
+        quality: "auto",
+        fetch_format: "auto",
+      },
+      (error, result) => {
+        if (error) reject(error);
+        else resolve(result);
+      }
+    );
+    uploadStream.end(req.file.buffer);
+  });
+
+  const updatedUser = await prisma.user.update({
+    where: { id: targetUserId },
+    data: {
+      profilePicture: uploadResult.secure_url,
+    },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true,
+      profilePicture: true,
+      phone: true,
+      faceScan: true,
+      role: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
+
+  res.status(HTTP_STATUS_CODES.OK || 200).json({
+    message: "Profile picture updated successfully.",
+    data: updatedUser,
+  });
+});

@@ -10,9 +10,11 @@ import {
   deleteUser,
   deleteAllUsers,
   changePassword,
+  updateProfilePicture,
 } from "../controllers/index.js";
 import { authorizeRole } from "../middleware/authorize-role.js";
 import { authenticateJWT } from "../middleware/jwt-authentication.js";
+import { upload } from "../config/multer-setup.js";
 
 router.post("/", authenticateJWT, authorizeRole(["ADMIN"]), ...addUser);
 
@@ -54,5 +56,12 @@ router.patch(
 );
 
 router.delete("/", authenticateJWT, authorizeRole(["ADMIN"]), deleteAllUsers);
+
+router.patch(
+  "/:userId/profile-picture",
+  authenticateJWT,
+  upload.single("profilePicture"),
+  updateProfilePicture
+);
 
 export default router;

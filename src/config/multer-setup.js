@@ -1,19 +1,33 @@
 import multer from "multer";
+import { BadRequestError } from "../middleware/error-handler.js";
 
 const storage = multer.memoryStorage();
 
+// File filter for images only
+const fileFilter = (req, file, cb) => {
+  const allowedMimeTypes = [
+    "image/jpeg",
+    "image/png",
+    "image/jpg",
+    "image/webp",
+  ];
+
+  if (allowedMimeTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(
+      new BadRequestError(
+        "Only image files (JPEG, PNG, JPG, WEBP) are allowed."
+      ),
+      false
+    );
+  }
+};
+
 export const upload = multer({
-  storage: storage,
+  storage,
+  fileFilter,
   limits: {
-    fileSize: 10 * 1024 * 1024, // 5MB limit
-  },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith("image/")) {
-      cb(null, true);
-    } else {
-      cb(new Error("Only image files are allowed"), false);
-    }
+    fileSize: 5 * 1024 * 1024, // 5MB max file size
   },
 });
-
-export const uploadProfilePicture = upload.single("profilePicture");
