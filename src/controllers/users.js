@@ -478,6 +478,8 @@ export const updateProfilePicture = asyncHandler(async (req, res, _next) => {
     const uploadStream = cloudinary.v2.uploader.upload_stream(
       {
         folder: "bethere",
+        quality: "auto",
+        fetch_format: "auto",
       },
       (error, result) => {
         if (error) reject(error);
