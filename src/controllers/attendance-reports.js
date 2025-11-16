@@ -1,48 +1,27 @@
-// src/controllers/attendance-reports.js
 import prisma from "../config/prisma-client.js";
-import {
-  asyncHandler,
-  NotFoundError,
-  ValidationError,
-  UnauthorizedError,
-} from "../middleware/error-handler.js";
+import { asyncHandler, ValidationError } from "../middleware/error-handler.js";
 import { HTTP_STATUS_CODES } from "../config/constants.js";
-import { startOfDay, endOfDay, parseISO } from "date-fns";
 
-export const getAttendanceReport = asyncHandler(async (req, res, _next) => {
-  const {
-    startDate,
-    endDate,
-    eventId,
-    userId,
-    status,
-    eventType,
-    locationId,
-    groupBy = "event",
-  } = req.query;
-
+export const getAttendanceReports = asyncHandler(async (req, res, _next) => {
   const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 50;
+  const limit = parseInt(req.query.limit) || 10;
   const skip = (page - 1) * limit;
 
+  const search = req.query.search || "";
+  const userId = req.query.userId;
+  const eventName = req.query.eventName;
+  const locationName = req.query.locationName;
+  const status = req.query.status;
+  const isRecurring = req.query.isRecurring;
+  const eventType = req.query.eventType;
+  const checkInStartDate = req.query.checkInStartDate;
+  const checkInEndDate = req.query.checkInEndDate;
+  const sessionStartDate = req.query.sessionStartDate;
+  const sessionEndDate = req.query.sessionEndDate;
+  const city = req.query.city;
+  const country = req.query.country;
+
   const whereClause = {};
-
-  if (startDate || endDate) {
-    whereClause.checkInTime = {};
-    if (startDate) {
-      whereClause.checkInTime.gte = startOfDay(parseISO(startDate));
-    }
-    if (endDate) {
-      whereClause.checkInTime.lte = endOfDay(parseISO(endDate));
-    }
-  }
-
-  if (eventId) {
-    if (isNaN(parseInt(eventId))) {
-      throw new ValidationError("Valid event ID is required.");
-    }
-    whereClause.session = { eventId: parseInt(eventId) };
-  }
 
   if (userId) {
     if (isNaN(parseInt(userId))) {
@@ -51,6 +30,7 @@ export const getAttendanceReport = asyncHandler(async (req, res, _next) => {
     whereClause.userId = parseInt(userId);
   }
 
+  // Filter by attendance status
   if (status) {
     const validStatuses = ["PRESENT", "LATE", "ABSENT"];
     if (!validStatuses.includes(status.toUpperCase())) {
@@ -61,31 +41,125 @@ export const getAttendanceReport = asyncHandler(async (req, res, _next) => {
     whereClause.status = status.toUpperCase();
   }
 
+  const sessionFilters = {};
+
+  if (sessionStartDate || sessionEndDate) {
+    sessionFilters.AND = [];
+
+    if (sessionStartDate) {
+      const startDate = new Date(sessionStartDate);
+      sessionFilters.AND.push({
+        startDate: { gte: startDate },
+      });
+    }
+
+    if (sessionEndDate) {
+      const endDate = new Date(sessionEndDate);
+      endDate.setHours(23, 59, 59, 999);
+      sessionFilters.AND.push({
+        endDate: { lte: endDate },
+      });
+    }
+  }
+
+  const eventFilters = {};
+
+  if (eventName) {
+    eventFilters.title = { contains: eventName, mode: "insensitive" };
+  }
+
+  if (isRecurring !== undefined) {
+    const recurringValue = isRecurring === "true" || isRecurring === true;
+    eventFilters.isRecurring = recurringValue;
+  }
+
   if (eventType) {
-    if (!whereClause.session) {
-      whereClause.session = {};
+    eventFilters.type = { contains: eventType, mode: "insensitive" };
+  }
+
+  const locationFilters = {};
+
+  if (locationName) {
+    locationFilters.name = { contains: locationName, mode: "insensitive" };
+  }
+
+  if (city) {
+    locationFilters.city = { contains: city, mode: "insensitive" };
+  }
+
+  if (country) {
+    locationFilters.country = { contains: country, mode: "insensitive" };
+  }
+
+  // Combine all filters into session and event structure
+  if (Object.keys(locationFilters).length > 0) {
+    eventFilters.location = locationFilters;
+  }
+
+  if (Object.keys(eventFilters).length > 0) {
+    sessionFilters.event = eventFilters;
+  }
+
+  if (Object.keys(sessionFilters).length > 0) {
+    whereClause.session = sessionFilters;
+  }
+
+  if (search) {
+    whereClause.OR = [
+      { user: { firstName: { contains: search, mode: "insensitive" } } },
+      { user: { lastName: { contains: search, mode: "insensitive" } } },
+      { user: { email: { contains: search, mode: "insensitive" } } },
+      {
+        session: {
+          event: { title: { contains: search, mode: "insensitive" } },
+        },
+      },
+      {
+        session: {
+          event: { description: { contains: search, mode: "insensitive" } },
+        },
+      },
+      {
+        session: { event: { type: { contains: search, mode: "insensitive" } } },
+      },
+      {
+        session: {
+          event: {
+            location: { name: { contains: search, mode: "insensitive" } },
+          },
+        },
+      },
+      {
+        session: {
+          event: {
+            location: { city: { contains: search, mode: "insensitive" } },
+          },
+        },
+      },
+      {
+        session: {
+          event: {
+            location: { country: { contains: search, mode: "insensitive" } },
+          },
+        },
+      },
+    ];
+  }
+
+  // Filter by check-in date range
+  if (checkInStartDate || checkInEndDate) {
+    whereClause.checkInTime = {};
+    if (checkInStartDate) {
+      whereClause.checkInTime.gte = new Date(checkInStartDate);
     }
-    if (whereClause.session.event) {
-      whereClause.session.event.type = eventType;
-    } else {
-      whereClause.session.event = { type: eventType };
+    if (checkInEndDate) {
+      const endDateTime = new Date(checkInEndDate);
+      endDateTime.setHours(23, 59, 59, 999);
+      whereClause.checkInTime.lte = endDateTime;
     }
   }
 
-  if (locationId) {
-    if (isNaN(parseInt(locationId))) {
-      throw new ValidationError("Valid location ID is required.");
-    }
-    if (!whereClause.session) {
-      whereClause.session = {};
-    }
-    if (whereClause.session.event) {
-      whereClause.session.event.locationId = parseInt(locationId);
-    } else {
-      whereClause.session.event = { locationId: parseInt(locationId) };
-    }
-  }
-
+  // Fetch attendance records and total count
   const [attendances, totalRecords] = await Promise.all([
     prisma.attendance.findMany({
       where: whereClause,
@@ -102,7 +176,6 @@ export const getAttendanceReport = asyncHandler(async (req, res, _next) => {
             lastName: true,
             email: true,
             profilePicture: true,
-            role: true,
           },
         },
         session: {
@@ -119,72 +192,31 @@ export const getAttendanceReport = asyncHandler(async (req, res, _next) => {
     prisma.attendance.count({ where: whereClause }),
   ]);
 
-  const statistics = await calculateAttendanceStatistics(whereClause);
-
-  let groupedData = null;
-  if (attendances.length > 0) {
-    groupedData = groupAttendanceData(attendances, groupBy);
-  }
-
-  res.status(HTTP_STATUS_CODES.OK || 200).json({
-    message: "Attendance report generated successfully.",
-    data: attendances,
-    statistics,
-    groupedData,
-    pagination: {
-      totalRecords,
-      page,
-      limit,
-      totalPages: Math.ceil(totalRecords / limit),
+  const formattedAttendances = attendances.map((attendance) => ({
+    attendanceId: attendance.id,
+    userName: `${attendance.user.firstName} ${attendance.user.lastName}`,
+    userEmail: attendance.user.email,
+    userId: attendance.user.id,
+    eventTitle: attendance.session.event.title,
+    eventId: attendance.session.event.id,
+    eventType: attendance.session.event.type,
+    isRecurring: attendance.session.event.isRecurring,
+    sessionId: attendance.session.id,
+    sessionStartDate: attendance.session.startDate,
+    sessionEndDate: attendance.session.endDate,
+    location: {
+      id: attendance.session.event.location.id,
+      name: attendance.session.event.location.name,
+      city: attendance.session.event.location.city,
+      country: attendance.session.event.location.country,
     },
-    filters: {
-      startDate: startDate || null,
-      endDate: endDate || null,
-      eventId: eventId || null,
-      userId: userId || null,
-      status: status || null,
-      eventType: eventType || null,
-      locationId: locationId || null,
-      groupBy,
-    },
-  });
-});
+    checkInTime: attendance.checkInTime,
+    checkOutTime: attendance.checkOutTime,
+    status: attendance.status,
+    createdAt: attendance.createdAt,
+  }));
 
-/**
- * Get attendance summary statistics
- */
-export const getAttendanceSummary = asyncHandler(async (req, res, _next) => {
-  const { startDate, endDate, eventId, userId } = req.query;
-
-  const whereClause = {};
-
-  if (startDate || endDate) {
-    whereClause.checkInTime = {};
-    if (startDate) {
-      whereClause.checkInTime.gte = startOfDay(parseISO(startDate));
-    }
-    if (endDate) {
-      whereClause.checkInTime.lte = endOfDay(parseISO(endDate));
-    }
-  }
-
-  if (eventId) {
-    if (isNaN(parseInt(eventId))) {
-      throw new ValidationError("Valid event ID is required.");
-    }
-    whereClause.session = { eventId: parseInt(eventId) };
-  }
-
-  if (userId) {
-    if (isNaN(parseInt(userId))) {
-      throw new ValidationError("Valid user ID is required.");
-    }
-    whereClause.userId = parseInt(userId);
-  }
-
-  const statistics = await calculateAttendanceStatistics(whereClause);
-
-  const topAttendees = await prisma.attendance.groupBy({
+  const topAttendeesQuery = await prisma.attendance.groupBy({
     by: ["userId"],
     where: whereClause,
     _count: {
@@ -195,11 +227,11 @@ export const getAttendanceSummary = asyncHandler(async (req, res, _next) => {
         id: "desc",
       },
     },
-    take: 10,
+    take: 5,
   });
 
   const topAttendeesWithDetails = await Promise.all(
-    topAttendees.map(async (attendee) => {
+    topAttendeesQuery.map(async (attendee) => {
       const user = await prisma.user.findUnique({
         where: { id: attendee.userId },
         select: {
@@ -210,385 +242,40 @@ export const getAttendanceSummary = asyncHandler(async (req, res, _next) => {
           profilePicture: true,
         },
       });
+
       return {
-        user,
+        userId: attendee.userId,
+        userName: `${user.firstName} ${user.lastName}`,
+        email: user.email,
+        profilePicture: user.profilePicture,
         attendanceCount: attendee._count.id,
       };
     })
   );
 
-  const topEvents = await prisma.attendance.findMany({
-    where: whereClause,
-    include: {
-      session: {
-        include: {
-          event: {
-            include: {
-              location: true,
-            },
-          },
-        },
-      },
-    },
-  });
-
-  const eventAttendanceCounts = {};
-  topEvents.forEach((attendance) => {
-    const eventId = attendance.session.event.id;
-    if (!eventAttendanceCounts[eventId]) {
-      eventAttendanceCounts[eventId] = {
-        event: attendance.session.event,
-        count: 0,
-      };
-    }
-    eventAttendanceCounts[eventId].count++;
-  });
-
-  const topEventsSorted = Object.values(eventAttendanceCounts)
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 10);
-
-  res.status(HTTP_STATUS_CODES.OK || 200).json({
-    message: "Attendance summary generated successfully.",
-    statistics,
-    topAttendees: topAttendeesWithDetails,
-    topEvents: topEventsSorted,
-    filters: {
-      startDate: startDate || null,
-      endDate: endDate || null,
-      eventId: eventId || null,
-      userId: userId || null,
-    },
-  });
-});
-
-/**
- * Get attendance rate by event
- */
-export const getEventAttendanceRate = asyncHandler(async (req, res, _next) => {
-  const { eventId } = req.params;
-  const currentUserRole = req.user.role;
-
-  if (currentUserRole !== "ADMIN") {
-    throw new UnauthorizedError(
-      "Only administrators can access attendance rates."
-    );
-  }
-
-  if (!eventId || isNaN(parseInt(eventId))) {
-    throw new ValidationError("Valid event ID is required.");
-  }
-
-  const event = await prisma.event.findUnique({
-    where: { id: parseInt(eventId) },
-    include: {
-      location: true,
-      sessions: {
-        include: {
-          attendances: {
-            include: {
-              user: {
-                select: {
-                  id: true,
-                  firstName: true,
-                  lastName: true,
-                  email: true,
-                },
-              },
-            },
-          },
-        },
-        orderBy: {
-          startDate: "desc",
-        },
-      },
-    },
-  });
-
-  if (!event) {
-    throw new NotFoundError(`Event with ID ${eventId} not found.`);
-  }
-
-  const totalUsers = await prisma.user.count({
-    where: { role: "USER" },
-  });
-
-  // Calculate attendance statistics per session
-  const sessionStats = event.sessions.map((session) => {
-    const totalAttendances = session.attendances.length;
-    const presentCount = session.attendances.filter(
-      (a) => a.status === "PRESENT"
-    ).length;
-    const lateCount = session.attendances.filter(
-      (a) => a.status === "LATE"
-    ).length;
-    const absentCount = session.attendances.filter(
-      (a) => a.status === "ABSENT"
-    ).length;
-
-    return {
-      sessionId: session.id,
-      startDate: session.startDate,
-      endDate: session.endDate,
-      totalAttendances,
-      presentCount,
-      lateCount,
-      absentCount,
-      attendanceRate:
-        totalUsers > 0 ? (totalAttendances / totalUsers) * 100 : 0,
-      presentRate:
-        totalAttendances > 0 ? (presentCount / totalAttendances) * 100 : 0,
-    };
-  });
-
-  // Overall event statistics
-  const totalAttendances = event.sessions.reduce(
-    (sum, session) => sum + session.attendances.length,
-    0
-  );
-  const totalPresent = event.sessions.reduce(
-    (sum, session) =>
-      sum + session.attendances.filter((a) => a.status === "PRESENT").length,
-    0
-  );
-  const totalLate = event.sessions.reduce(
-    (sum, session) =>
-      sum + session.attendances.filter((a) => a.status === "LATE").length,
-    0
-  );
-  const totalAbsent = event.sessions.reduce(
-    (sum, session) =>
-      sum + session.attendances.filter((a) => a.status === "ABSENT").length,
-    0
-  );
-
-  res.status(HTTP_STATUS_CODES.OK || 200).json({
-    message: "Event attendance rate calculated successfully.",
-    event: {
-      id: event.id,
-      title: event.title,
-      description: event.description,
-      type: event.type,
-      location: event.location,
-    },
-    overallStatistics: {
-      totalSessions: event.sessions.length,
-      totalAttendances,
-      totalPresent,
-      totalLate,
-      totalAbsent,
-      averageAttendanceRate:
-        event.sessions.length > 0
-          ? sessionStats.reduce((sum, s) => sum + s.attendanceRate, 0) /
-            event.sessions.length
-          : 0,
-      presentRate:
-        totalAttendances > 0 ? (totalPresent / totalAttendances) * 100 : 0,
-    },
-    sessionStats,
-  });
-});
-
-/**
- * Get user attendance rate
- */
-export const getUserAttendanceRate = asyncHandler(async (req, res, _next) => {
-  const { userId } = req.params;
-  const currentUserId = req.user.id;
-  const currentUserRole = req.user.role;
-
-  const targetUserId = parseInt(userId);
-
-  if (
-    targetUserId !== parseInt(currentUserId?.toString() || "0") &&
-    currentUserRole !== "ADMIN"
-  ) {
-    throw new UnauthorizedError(
-      "Only admins can access other users' attendance rates."
-    );
-  }
-
-  if (!userId || isNaN(parseInt(userId))) {
-    throw new ValidationError("Valid user ID is required.");
-  }
-
-  const user = await prisma.user.findUnique({
-    where: { id: parseInt(userId) },
-    select: {
-      id: true,
-      firstName: true,
-      lastName: true,
-      email: true,
-      profilePicture: true,
-      role: true,
-    },
-  });
-
-  if (!user) {
-    throw new NotFoundError(`User with ID ${userId} not found.`);
-  }
-
-  const { startDate, endDate } = req.query;
-
-  const whereClause = {
-    userId: parseInt(userId),
-  };
-
-  if (startDate || endDate) {
-    whereClause.checkInTime = {};
-    if (startDate) {
-      whereClause.checkInTime.gte = startOfDay(parseISO(startDate));
-    }
-    if (endDate) {
-      whereClause.checkInTime.lte = endOfDay(parseISO(endDate));
-    }
-  }
-
-  const attendances = await prisma.attendance.findMany({
-    where: whereClause,
-    include: {
-      session: {
-        include: {
-          event: {
-            include: {
-              location: true,
-            },
-          },
-        },
-      },
-    },
-  });
-
-  const statistics = {
-    totalAttendances: attendances.length,
-    presentCount: attendances.filter((a) => a.status === "PRESENT").length,
-    lateCount: attendances.filter((a) => a.status === "LATE").length,
-    absentCount: attendances.filter((a) => a.status === "ABSENT").length,
-  };
-
-  statistics.presentRate =
-    statistics.totalAttendances > 0
-      ? (statistics.presentCount / statistics.totalAttendances) * 100
-      : 0;
-  statistics.lateRate =
-    statistics.totalAttendances > 0
-      ? (statistics.lateCount / statistics.totalAttendances) * 100
-      : 0;
-  statistics.absentRate =
-    statistics.totalAttendances > 0
-      ? (statistics.absentCount / statistics.totalAttendances) * 100
-      : 0;
-
-  // Group by event
-  const eventStats = {};
-  attendances.forEach((attendance) => {
-    const eventId = attendance.session.event.id;
-    if (!eventStats[eventId]) {
-      eventStats[eventId] = {
-        event: attendance.session.event,
-        attendances: [],
-      };
-    }
-    eventStats[eventId].attendances.push(attendance);
-  });
-
-  const eventAttendanceRates = Object.values(eventStats).map((stat) => {
-    const total = stat.attendances.length;
-    const present = stat.attendances.filter(
-      (a) => a.status === "PRESENT"
-    ).length;
-    const late = stat.attendances.filter((a) => a.status === "LATE").length;
-
-    return {
-      event: {
-        id: stat.event.id,
-        title: stat.event.title,
-        type: stat.event.type,
-        location: stat.event.location,
-      },
-      totalAttendances: total,
-      presentCount: present,
-      lateCount: late,
-      presentRate: total > 0 ? (present / total) * 100 : 0,
-    };
-  });
-
-  res.status(HTTP_STATUS_CODES.OK || 200).json({
-    message: "User attendance rate calculated successfully.",
-    user,
-    overallStatistics: statistics,
-    eventAttendanceRates,
-    filters: {
-      startDate: startDate || null,
-      endDate: endDate || null,
-    },
-  });
-});
-
-// Helper function to calculate attendance statistics
-async function calculateAttendanceStatistics(whereClause) {
-  const [total, present, late, absent] = await Promise.all([
-    prisma.attendance.count({ where: whereClause }),
-    prisma.attendance.count({
+  const summary = {
+    totalAttendance: totalRecords,
+    presentCount: await prisma.attendance.count({
       where: { ...whereClause, status: "PRESENT" },
     }),
-    prisma.attendance.count({
+    lateCount: await prisma.attendance.count({
       where: { ...whereClause, status: "LATE" },
     }),
-    prisma.attendance.count({
+    absentCount: await prisma.attendance.count({
       where: { ...whereClause, status: "ABSENT" },
     }),
-  ]);
-
-  return {
-    total,
-    present,
-    late,
-    absent,
-    presentPercentage: total > 0 ? ((present / total) * 100).toFixed(2) : 0,
-    latePercentage: total > 0 ? ((late / total) * 100).toFixed(2) : 0,
-    absentPercentage: total > 0 ? ((absent / total) * 100).toFixed(2) : 0,
   };
-}
 
-function groupAttendanceData(attendances, groupBy) {
-  const grouped = {};
-
-  attendances.forEach((attendance) => {
-    let key;
-
-    switch (groupBy) {
-      case "event":
-        key = attendance.session.event.title;
-        break;
-      case "user":
-        key = `${attendance.user.firstName} ${attendance.user.lastName}`;
-        break;
-      case "date":
-        key = attendance.checkInTime.toISOString().split("T")[0];
-        break;
-      case "status":
-        key = attendance.status;
-        break;
-      default:
-        key = attendance.session.event.title;
-    }
-
-    if (!grouped[key]) {
-      grouped[key] = {
-        key,
-        count: 0,
-        attendances: [],
-        present: 0,
-        late: 0,
-        absent: 0,
-      };
-    }
-
-    grouped[key].count++;
-    grouped[key].attendances.push(attendance);
-    grouped[key][attendance.status.toLowerCase()]++;
+  res.status(HTTP_STATUS_CODES.OK || 200).json({
+    message: "Attendance reports successfully fetched.",
+    data: formattedAttendances,
+    topAttendees: topAttendeesWithDetails,
+    summary,
+    pagination: {
+      totalRecords,
+      page,
+      limit,
+      totalPages: Math.ceil(totalRecords / limit),
+    },
   });
-
-  return Object.values(grouped).sort((a, b) => b.count - a.count);
-}
+});
