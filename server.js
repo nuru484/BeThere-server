@@ -11,6 +11,7 @@ import {
 } from "./src/middleware/error-handler.js";
 import logger from "./src/utils/logger.js";
 import { v2 as cloudinary } from "cloudinary";
+import "./worker.js";
 
 const app = express();
 
