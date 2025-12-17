@@ -9,6 +9,15 @@ import { addDays, startOfDay, setHours, setMinutes } from "date-fns";
 async function main() {
   logger.info("🌱 Starting database seeding...");
 
+  const existingUsers = await prisma.user.count();
+  const existingLocations = await prisma.location.count();
+
+  if (existingUsers > 1 && existingLocations > 0) {
+    logger.info("✅ Database already seeded. Skipping seed operation.");
+    logger.info("💡 To re-seed, clear the database first.");
+    return;
+  }
+
   // ============ SEED ADMIN USER ============
   const adminEmail = ENV.ADMIN_EMAIL;
   const adminPassword = ENV.ADMIN_PASSWORD;
@@ -118,59 +127,86 @@ async function main() {
   logger.info(`✅ ${users.length} regular users seeded successfully`);
 
   // ============ SEED LOCATIONS ============
-  const locations = await Promise.all([
-    prisma.location.create({
-      data: {
-        name: "Accra International Conference Centre",
-        latitude: 5.556818,
-        longitude: -0.196477,
-        city: "Accra",
-        country: "Ghana",
+  const locationData = [
+    {
+      name: "Accra International Conference Centre",
+      latitude: 5.556818,
+      longitude: -0.196477,
+      city: "Accra",
+      country: "Ghana",
+    },
+    {
+      name: "University of Ghana, Legon",
+      latitude: 5.651358,
+      longitude: -0.186964,
+      city: "Accra",
+      country: "Ghana",
+    },
+    {
+      name: "Kumasi Cultural Centre",
+      latitude: 6.687904,
+      longitude: -1.624027,
+      city: "Kumasi",
+      country: "Ghana",
+    },
+    {
+      name: "Cape Coast Castle",
+      latitude: 5.10579,
+      longitude: -1.24681,
+      city: "Cape Coast",
+      country: "Ghana",
+    },
+    {
+      name: "Tamale Sports Stadium",
+      latitude: 9.40045,
+      longitude: -0.83918,
+      city: "Tamale",
+      country: "Ghana",
+    },
+  ];
+
+  // Check if locations already exist
+  const existingLocationNames = await prisma.location.findMany({
+    where: {
+      name: {
+        in: locationData.map((l) => l.name),
       },
-    }),
-    prisma.location.create({
-      data: {
-        name: "University of Ghana, Legon",
-        latitude: 5.651358,
-        longitude: -0.186964,
-        city: "Accra",
-        country: "Ghana",
-      },
-    }),
-    prisma.location.create({
-      data: {
-        name: "Kumasi Cultural Centre",
-        latitude: 6.687904,
-        longitude: -1.624027,
-        city: "Kumasi",
-        country: "Ghana",
-      },
-    }),
-    prisma.location.create({
-      data: {
-        name: "Cape Coast Castle",
-        latitude: 5.10579,
-        longitude: -1.24681,
-        city: "Cape Coast",
-        country: "Ghana",
-      },
-    }),
-    prisma.location.create({
-      data: {
-        name: "Tamale Sports Stadium",
-        latitude: 9.40045,
-        longitude: -0.83918,
-        city: "Tamale",
-        country: "Ghana",
-      },
-    }),
-  ]);
+    },
+    select: { name: true, id: true },
+  });
+
+  const existingLocationMap = new Map(
+    existingLocationNames.map((l) => [l.name, l])
+  );
+
+  const locations = [];
+  for (const locData of locationData) {
+    if (existingLocationMap.has(locData.name)) {
+      locations.push(existingLocationMap.get(locData.name));
+    } else {
+      const newLocation = await prisma.location.create({
+        data: locData,
+      });
+      locations.push(newLocation);
+    }
+  }
 
   logger.info(`✅ ${locations.length} locations seeded successfully`);
 
   // ============ SEED EVENTS ============
   const now = new Date();
   const today = startOfDay(now);
+
+  // Check if events already exist
+  const existingEventsCount = await prisma.event.count();
+
+  if (existingEventsCount > 0) {
+    logger.info(
+      "✅ Events already seeded. Skipping event, session, and attendance seeding."
+    );
+    logger.info("\n🎉 Database seeding completed successfully!");
+    return;
+  }
 
   // Past Event (completed) - ONE-TIME EVENT
   const pastEvent = await prisma.event.create({
