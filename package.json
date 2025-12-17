@@ -10,7 +10,7 @@
     "deploy": "npm install && npx prisma migrate deploy && npm run seed",
     "seed": "node prisma/seed.js",
     "worker:dev": "node --env-file .env worker.js",
-    "worker": "node build/worker.js",
+    "worker": "node worker.js",
     "studio": "node --env-file .env ./node_modules/.bin/prisma studio"
   },
   "author": "",

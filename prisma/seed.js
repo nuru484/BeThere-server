@@ -1,6 +1,6 @@
 // prisma/seed.ts
 import { role, AttendanceStatus } from "@prisma/client";
-import prisma from "../src/config/prisma-client.js";
+import { prisma } from "../src/config/prisma-client.js";
 import * as bcrypt from "bcrypt";
 import logger from "../src/utils/logger.js";
 import ENV from "../src/config/env.js";
