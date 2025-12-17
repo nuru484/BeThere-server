@@ -1,6 +1,6 @@
 // src/jobs/session-scheduler.js
 import { Queue } from "bullmq";
-import prisma from "../config/prisma-client.js";
+import { prisma } from "../config/prisma-client.js";
 import { createRedisConnection } from "../config/redis-connection.js";
 import { addDays, startOfDay, isBefore, isEqual } from "date-fns";
 import { sessionQueue } from "./session-queue.js";

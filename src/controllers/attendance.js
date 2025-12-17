@@ -1,4 +1,4 @@
-import prisma from "../config/prisma-client.js";
+import { prisma } from "../config/prisma-client.js";
 import * as turf from "@turf/turf";
 import {
   asyncHandler,
@@ -324,7 +324,7 @@ export const updateAttendance = [
   handleUpdateAttendance,
 ];
 
-export const getUserAttendance = asyncHandler(async (req, res, _next) => {
+export const getUserAttendance = asyncHandler(async (req, res) => {
   const { userId } = req.params;
   const currentUserId = req.user.id;
   const currentUserRole = req.user.role;

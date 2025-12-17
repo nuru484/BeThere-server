@@ -1,5 +1,5 @@
 // src/controllers/dashboard/admin.js
-import prisma from "../../config/prisma-client.js";
+import { prisma } from "../../config/prisma-client.js";
 import {
   asyncHandler,
   ValidationError,

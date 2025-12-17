@@ -1,6 +1,6 @@
 // src/jobs/session-worker.js
 import { Worker } from "bullmq";
-import prisma from "../config/prisma-client.js";
+import { prisma } from "../config/prisma-client.js";
 import { createRedisConnection } from "../config/redis-connection.js";
 import { addDays, startOfDay, format } from "date-fns";
 import logger from "../utils/logger.js";

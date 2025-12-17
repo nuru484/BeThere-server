@@ -1,4 +1,4 @@
-import prisma from "../config/prisma-client.js";
+import { prisma } from "../config/prisma-client.js";
 import { compare } from "bcrypt";
 import { ValidationError } from "../middleware/error-handler.js";
 import ENV from "../config/env.js";

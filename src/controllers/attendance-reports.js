@@ -1,8 +1,8 @@
-import prisma from "../config/prisma-client.js";
+import { prisma } from "../config/prisma-client.js";
 import { asyncHandler, ValidationError } from "../middleware/error-handler.js";
 import { HTTP_STATUS_CODES } from "../config/constants.js";
 
-export const getAttendanceReports = asyncHandler(async (req, res, _next) => {
+export const getAttendanceReports = asyncHandler(async (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 10;
   const skip = (page - 1) * limit;

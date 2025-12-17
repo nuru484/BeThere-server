@@ -1,3 +1,4 @@
+// src/middleware/error-handler.js
 import logger from "../utils/logger.js";
 import ENV from "../config/env.js";
 import { handlePrismaError, isPrismaError } from "./prisma-error-handler.js";
@@ -172,9 +173,7 @@ export const asyncHandler = (fn) => {
   };
 };
 
-/**
- * Common custom error subclasses
- */
+
 export class NotFoundError extends CustomError {
   constructor(message = "Resource not found", options = {}) {
     super(404, message, { ...options, severity: ErrorSeverity.LOW });
