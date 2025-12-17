@@ -7,7 +7,7 @@
     "dev": "node --watch --env-file .env server",
     "migrate": "node --env-file .env ./node_modules/.bin/prisma migrate dev --name init",
     "start": "node server.js",
-    "deploy": "npm install && npx prisma migrate deploy && npm run seed",
+    "deploy": "npm install && npx prisma migrate deploy && npx prisma generate && npm run seed",
     "seed": "node prisma/seed.js",
     "worker:dev": "node --env-file .env worker.js",
     "worker": "node worker.js",
