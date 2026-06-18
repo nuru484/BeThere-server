@@ -1,9 +1,29 @@
 # <img src="public/assets/logo.png" alt="BeThere Logo" width="35" style="vertical-align: middle;"/> BeThere – Smart Attendance System Backend
 
-**BeThere** is an intelligent attendance tracking backend built for modern organizations and event systems.
-It powers the **BeThere client site**,  handling authentication, event scheduling, and real-time face-based attendance verification.
+**BeThere** is the backend that powers a full-stack **smart attendance system** which verifies attendance using **facial recognition** combined with **GPS geolocation**. Instead of signing a sheet or tapping a card, a person looks into their device camera, the system matches their face against an enrolled scan, confirms they are physically within **50 meters** of the event location, and only then records them as present. It is built for organizations, schools, and recurring events where attendance records need to be genuinely hard to fake — you have to *be there*, in person.
 
-With built-in **geolocation validation**, **background job automation**, and **facial scan matching**, BeThere ensures that attendance records are secure, accurate, and location-verified.
+This repository is the **API and background job engine**. It handles authentication, event and session scheduling, geolocation validation, face-scan storage/matching, and organization-wide attendance analytics. The companion frontend lives in [BeThere-client](https://github.com/nuru484/BeThere-client.git).
+
+> **One-line pitch:** Attendance you can't fake — face recognition + GPS verification confirm the right person showed up at the right place, in real time.
+
+---
+
+## 🧠 How It Works
+
+**1. Face enrollment & matching.**
+Facial descriptors are produced in the browser with **face-api.js** (the frontend captures 3 samples and averages them into a single **128-dimension descriptor**). This server stores that descriptor on the `User` record (`faceScan` JSON) and uses it as the reference signature for future verification. Matching is performed by Euclidean distance against the enrolled descriptor.
+
+**2. Location + time gate.**
+On check-in / check-out the client sends the user's live GPS coordinates. The attendance controller uses **@turf/turf** to compute the geodesic distance between the user and the event's stored location and **rejects anyone beyond 50 meters**. It also enforces the session's daily time window and stamps the record as **PRESENT** when within an hour of the start time, otherwise **LATE** (status enum: `PRESENT / LATE / ABSENT`).
+
+**3. Automated recurring sessions.**
+Events can be one-off or **recurring** (every X days, with a duration and a daily open/close window). A **BullMQ + Redis** pipeline (`session-scheduler.js` → `session-worker.js`, orchestrated by `worker.js`) automatically generates `Session` records for upcoming occurrences, deduplicates them, and runs as a **separate worker process** on Render. **date-fns** handles all date math.
+
+**4. Roles & dashboards.**
+Two roles (`ADMIN`, `USER`). **Users** check in/out of active sessions and view their own attendance history. **Admins** create/update/delete events, manage user records, **reset a user's face scan** when needed, and pull organization-wide analytics — attendance by user, by event, and totals of users / events / active sessions.
+
+**5. Auth & security.**
+Stateless **JWT** access + refresh tokens, role-based access control, password reset via hashed tokens delivered over email (nodemailer + EJS), **Cloudinary** for secure face-scan and profile-picture storage, CORS locked to trusted origins, and structured logging with **pino**.
 
 ---
 
@@ -51,27 +71,35 @@ With built-in **geolocation validation**, **background job automation**, and **f
 
 ### 🔐 Authentication & Security
 
-* **JWT-based authentication** (stateless, token sent once and encrypted on client).
+* **JWT-based authentication** — short-lived access token plus a **refresh token** for session renewal via the `/refresh-token` route (`cookie-parser`).
+* **Password hashing** with bcrypt.
+* **Password reset** flow — hashed, expiring reset tokens (`PasswordReset` table) delivered by email via **nodemailer + EJS** templates.
 * **Role-based access control** (`ADMIN` and `USER`).
-* **Cloudinary** handles secure face scan and profile picture storage.
+* **Cloudinary** handles secure face scan and profile picture storage (uploads parsed with `multer`).
 * CORS protection for trusted origins only.
 
 ---
 
 ## 🛠️ Tech Stack
 
-| Layer              | Technology / Library                 |
-| ------------------ | ------------------------------------ |
-| **Framework**      | Express.js (JavaScript – ES Modules) |
-| **Database**       | PostgreSQL + Prisma ORM              |
-| **Authentication** | JWT (JSON Web Token)                 |
-| **Job Queue**      | Redis + BullMQ (via ioredis)         |
-| **Geolocation**    | @turf/turf                           |
-| **Date Handling**  | date-fns                             |
-| **Validation**     | express-validator                    |
-| **File Storage**   | Cloudinary                           |
-| **Logging**        | pino + pino-pretty                   |
-| **Deployment**     | Render (Backend)                     |
+| Layer                  | Technology / Library                          |
+| ---------------------- | --------------------------------------------- |
+| **Framework**          | Express.js (JavaScript – ES Modules)          |
+| **Database**           | PostgreSQL (`pg` + `@prisma/adapter-pg`)      |
+| **ORM**                | Prisma                                         |
+| **Authentication**     | JWT (`jsonwebtoken`) access + refresh tokens  |
+| **Password Hashing**   | bcrypt                                          |
+| **Cookies**            | cookie-parser (refresh-token cookie)          |
+| **Job Queue**          | Redis + BullMQ (via ioredis)                  |
+| **Geolocation**        | @turf/turf                                     |
+| **Date Handling**      | date-fns                                        |
+| **File Uploads**       | multer (multipart parsing)                    |
+| **File Storage**       | Cloudinary                                      |
+| **Email**              | nodemailer + EJS templates                    |
+| **Validation**         | express-validator                              |
+| **Logging**            | pino + pino-pretty, morgan (HTTP requests)    |
+| **CORS**               | cors (trusted origins only)                   |
+| **Deployment**         | Render (API + separate background worker)     |
 
 ---
 
