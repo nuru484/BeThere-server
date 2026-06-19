@@ -6,11 +6,19 @@ import {
   verifyResetToken,
   resetPassword,
 } from "../controllers/index.js";
+import {
+  passwordResetRequestLimiter,
+  passwordResetConfirmLimiter,
+} from "../middleware/rate-limit.js";
 
-router.post("/request", ...requestPasswordReset);
+router.post("/request", passwordResetRequestLimiter, ...requestPasswordReset);
 
-router.post("/verify-reset-token", ...verifyResetToken);
+router.post(
+  "/verify-reset-token",
+  passwordResetConfirmLimiter,
+  ...verifyResetToken
+);
 
-router.post("/", ...resetPassword);
+router.post("/", passwordResetConfirmLimiter, ...resetPassword);
 
 export default router;
