@@ -40,7 +40,6 @@ Stateless **JWT** access + refresh tokens, role-based access control, password r
 * [Deployment](#-deployment)
 * [Contributing](#-contributing)
 * [License](#-license)
-* [Author](#-author)
 
 ---
 
@@ -323,15 +322,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-## 🧠 Author
-
-**Developer:** Nurudeen Abdul-Majeed  
-
-**Email:** [abdulmajeednurudeen47@gmail.com](mailto:abdulmajeednurudeen47@gmail.com)  
-
-**Backend API:** [BeThere Frontend](https://github.com/nuru484/BeThere-client.git)
-
----
