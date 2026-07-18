@@ -22,15 +22,44 @@ model User {
   faceScan       Json?
   role           role    @default(USER)
 
+  // Session epoch: bumped on refresh-token theft detection or forced logout,
+  // which invalidates every outstanding token minted before the bump.
+  tokenVersion Int @default(0)
+
+  // Soft delete: reads scope to deletedAt IS NULL via the prisma extension;
+  // history (attendance) survives account removal.
+  deletedAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   Attendance     Attendance[]
   passwordResets PasswordReset[]
+  refreshTokens  RefreshToken[]
 
-  @@index([id])
-  @@index([email])
-  @@index([phone])
+  // Intentional indexes only: id/email/phone were redundant (PK and @unique
+  // already index). deletedAt supports the soft-delete scoping every read
+  // now carries; role supports the admin list filter.
+  @@index([deletedAt])
+  @@index([role])
+}
+
+// One row per outstanding refresh token (hashed jti). Rotation consumes the
+// row and issues a successor; presenting a consumed jti again is treated as
+// theft and bumps the user's tokenVersion, killing every live session.
+model RefreshToken {
+  id         Int       @id @default(autoincrement())
+  userId     Int
+  jtiHash    String    @unique
+  expiresAt  DateTime
+  consumedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 model PasswordReset {
@@ -46,7 +75,6 @@ model PasswordReset {
   updatedAt DateTime @updatedAt
 
   @@index([userId])
-  @@index([tokenHash])
   @@index([expiresAt])
 }
 
@@ -63,6 +91,10 @@ model Event {
   endTime            String // When attendance closes (e.g., "19:30")
   archived           Boolean   @default(false) // Archive status
 
+  // Soft delete: removed events disappear from lists but their sessions and
+  // attendance history stay queryable for reports.
+  deletedAt DateTime?
+
   location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   locationId Int
   type       String
@@ -70,6 +102,13 @@ model Event {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   sessions  Session[]
+
+  // The list surface filters on archive state and orders by start date; the
+  // scheduler scans by recurrence; every read scopes deletedAt.
+  @@index([deletedAt])
+  @@index([archived, startDate])
+  @@index([isRecurring])
+  @@index([locationId])
 }
 
 model Session {
@@ -87,6 +126,8 @@ model Session {
   updatedAt DateTime @updatedAt
 
   @@unique([eventId, startDate])
+  // Check-in resolves "the active session today" by date window.
+  @@index([startDate, endDate])
 }
 
 model Location {
@@ -101,10 +142,7 @@ model Location {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([city])
-  @@index([country])
   @@index([name])
-  @@index([latitude, longitude])
 }
 
 enum AttendanceStatus {
@@ -128,4 +166,8 @@ model Attendance {
   updatedAt DateTime @updatedAt
 
   @@unique([userId, sessionId])
+  // Every report/list orders or filters by check-in time, and the session
+  // relation is joined constantly - both were unindexed.
+  @@index([checkInTime])
+  @@index([sessionId])
 }

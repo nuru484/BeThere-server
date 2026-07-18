@@ -7,6 +7,14 @@ import ENV from "../src/config/env.js";
 import { addDays, startOfDay, setHours, setMinutes } from "date-fns";
 
 async function main() {
+  // Explicit opt-in: without ADMIN_SEED_ENABLED=true the seed is a no-op, so
+  // a deploy pipeline can never silently plant demo credentials in
+  // production.
+  if (!ENV.ADMIN_SEED_ENABLED) {
+    logger.info("🌱 Seed skipped (ADMIN_SEED_ENABLED is not true).");
+    return;
+  }
+
   logger.info("🌱 Starting database seeding...");
 
   const existingUsers = await prisma.user.count();
