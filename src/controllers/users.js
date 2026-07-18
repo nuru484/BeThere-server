@@ -15,6 +15,7 @@ import {
   updateUserProfileValidation,
 } from "../validation/users-validation.js";
 import { parsePagination, paginationMeta } from "../utils/pagination.js";
+import { assertAttendant } from "../utils/authorization.js";
 import * as userService from "../services/user.service.js";
 import * as userQueryService from "../services/user-query.service.js";
 
@@ -68,20 +69,6 @@ export const updateUserProfile = [
   handleUpdateUserProfile,
 ];
 
-export const updateUserRole = asyncHandler(async (req, res, _next) => {
-  const targetUserId = parseUserId(req.params.userId);
-
-  const data = await userService.updateUserRole(
-    req.user,
-    targetUserId,
-    req.body.role
-  );
-
-  res.status(HTTP_STATUS_CODES.OK).json({
-    message: "User role updated successfully.",
-    data,
-  });
-});
 
 export const getUserById = asyncHandler(async (req, res, _next) => {
   const targetUserId = parseUserId(
@@ -133,6 +120,7 @@ export const deleteUser = asyncHandler(async (req, res, _next) => {
 });
 
 const handleChangePassword = asyncHandler(async (req, res, _next) => {
+  assertAttendant(req.user, "Admins change their password at /admins/change-password.");
   const userId = req.user?.id;
   const { currentPassword, newPassword } = req.body;
 

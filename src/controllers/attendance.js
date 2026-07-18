@@ -14,6 +14,7 @@ import {
 } from "../validation/attendance-validation.js";
 import { parsePagination, paginationMeta } from "../utils/pagination.js";
 import * as attendanceService from "../services/attendance.service.js";
+import { assertAttendant } from "../utils/authorization.js";
 import * as attendanceQueryService from "../services/attendance-query.service.js";
 
 const parseId = (value, message) => {
@@ -24,6 +25,7 @@ const parseId = (value, message) => {
 };
 
 const handleCreateAttendance = asyncHandler(async (req, res, _next) => {
+  assertAttendant(req.user, "Only attendants can check in.");
   const eventId = parseId(req.params.eventId, "Valid event ID is required.");
   const { latitude, longitude, faceDescriptor } = req.body;
 
@@ -45,6 +47,7 @@ export const createAttendance = [
 ];
 
 const handleUpdateAttendance = asyncHandler(async (req, res, _next) => {
+  assertAttendant(req.user, "Only attendants can check out.");
   const eventId = parseId(req.params.eventId, "Valid event ID is required.");
   const { latitude, longitude } = req.body;
 

@@ -11,9 +11,7 @@ import { BCRYPT_SALT_ROUNDS } from "../config/constants.js";
 import {
   BadRequestError,
   ConflictError,
-  ForbiddenError,
   NotFoundError,
-  ValidationError,
 } from "../middleware/error-handler.js";
 import { extractPublicIdFromUrl } from "../utils/extractPublicIdFromUrl.js";
 import { assertSelfOrAdmin } from "../utils/authorization.js";
@@ -31,7 +29,8 @@ export const USER_SELECT = {
   profilePicture: true,
   phone: true,
   faceScan: true,
-  role: true,
+  twoFactorEnabled: true,
+  phoneVerified: true,
   createdAt: true,
   updatedAt: true,
 };
@@ -44,6 +43,12 @@ async function assertEmailAvailable(email, excludeUserId) {
   if (existing && existing.id !== excludeUserId) {
     throw new ConflictError("A user with this email already exists.");
   }
+  // Emails are login identifiers across BOTH principal tables - an
+  // attendant sharing an admin's email would make login ambiguous.
+  const adminExisting = await prisma.admin.findUnique({ where: { email } });
+  if (adminExisting) {
+    throw new ConflictError("A user with this email already exists.");
+  }
 }
 
 async function assertPhoneAvailable(phone, excludeUserId) {
@@ -53,14 +58,13 @@ async function assertPhoneAvailable(phone, excludeUserId) {
   }
 }
 
-/** Admin-only: creates an account and returns the safe user shape. */
+/** Admin-only: creates an ATTENDANT account. */
 export async function createUser({
   firstName,
   lastName,
   email,
   password,
   phone,
-  role,
 }) {
   await assertEmailAvailable(email);
   if (phone) {
@@ -76,12 +80,11 @@ export async function createUser({
       email,
       password: hashedPassword,
       phone: phone || null,
-      role: role || "USER",
     },
     select: USER_SELECT,
   });
 
-  return toSafeUser(newUser);
+  return toSafeUser("USER", newUser);
 }
 
 /** Owner-or-admin profile update (name/email/phone). */
@@ -122,36 +125,7 @@ export async function updateUserProfile(actor, targetUserId, details) {
     select: USER_SELECT,
   });
 
-  return toSafeUser(updatedUser);
-}
-
-/** Admin-only role change; admins cannot change their own role. */
-export async function updateUserRole(actor, targetUserId, role) {
-  if (!["ADMIN", "USER"].includes(role)) {
-    throw new ValidationError("Invalid role. Must be ADMIN or USER.");
-  }
-
-  if (parseInt(actor?.id?.toString() || "0") === targetUserId) {
-    throw new ForbiddenError("You cannot update your own role.");
-  }
-
-  const user = await prisma.user.findFirst({ where: { id: targetUserId } });
-
-  if (!user) {
-    throw new NotFoundError("User not found.");
-  }
-
-  if (user.role === role) {
-    throw new BadRequestError(`User already has the role: ${role}`);
-  }
-
-  const updatedUser = await prisma.user.update({
-    where: { id: targetUserId },
-    data: { role },
-    select: USER_SELECT,
-  });
-
-  return toSafeUser(updatedUser);
+  return toSafeUser("USER", updatedUser);
 }
 
 /**
@@ -170,17 +144,11 @@ export async function softDeleteUser(actor, targetUserId) {
     throw new NotFoundError("User not found.");
   }
 
-  if (targetUserId === parseInt(actor?.id?.toString() || "0")) {
-    if (user.role === "ADMIN") {
-      throw new ForbiddenError("Admins cannot delete themselves");
-    }
-  }
-
   await prisma.user.update({
     where: { id: targetUserId },
     data: { deletedAt: new Date() },
   });
-  await revokeAllSessions(targetUserId);
+  await revokeAllSessions("USER", targetUserId);
 }
 
 /** Verifies the current password, sets the new one, revokes all sessions. */
@@ -214,7 +182,7 @@ export async function changePassword(userId, currentPassword, newPassword) {
 
   // A changed password revokes every outstanding session - if it changed
   // because of compromise, the attacker's tokens die with it.
-  await revokeAllSessions(userId);
+  await revokeAllSessions("USER", userId);
 }
 
 /**
@@ -273,5 +241,5 @@ export async function updateProfilePicture(actor, targetUserId, file) {
     select: USER_SELECT,
   });
 
-  return toSafeUser(updatedUser);
+  return toSafeUser("USER", updatedUser);
 }

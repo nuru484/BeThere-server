@@ -80,11 +80,18 @@ const ENV = {
   CLOUDINARY_API_SECRET: envRequired("CLOUDINARY_API_SECRET"),
   CLOUDINARY_CLOUD_NAME: envRequired("CLOUDINARY_CLOUD_NAME"),
 
+  /** Cookie scope for the auth cookies (unset = current host only). */
+  COOKIE_DOMAIN: envOptional("COOKIE_DOMAIN"),
   CORS_ACCESS: envOptional("CORS_ACCESS"),
   /** The venue timezone the "HH:MM" event windows are written in. */
   EVENT_TIMEZONE: envOptional("EVENT_TIMEZONE") ?? "Africa/Accra",
   DATABASE_URL: envRequired("DATABASE_URL"),
   FRONTEND_URL: envRequired("FRONTEND_URL"),
+
+  /** Frog (Wigal) SMS credentials - all three unset means log-only SMS. */
+  FROG_API_KEY: envOptional("FROG_API_KEY"),
+  FROG_SENDER_ID: envOptional("FROG_SENDER_ID"),
+  FROG_USERNAME: envOptional("FROG_USERNAME"),
 
   GMAIL_PASSWORD: envRequired("GMAIL_PASSWORD"),
   GMAIL_USER,
@@ -94,6 +101,9 @@ const ENV = {
 
   REDIS_URL: envRequired("REDIS_URL"),
   REFRESH_TOKEN_SECRET: envRequired("REFRESH_TOKEN_SECRET"),
+
+  /** Error tracking (Sentry). Optional: unset disables reporting. */
+  SENTRY_DSN: envOptional("SENTRY_DSN"),
 
   SMTP_HOST: envRequired("SMTP_HOST"),
   /** From-address on outgoing mail; defaults to the SMTP account user. */

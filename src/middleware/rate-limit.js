@@ -1,5 +1,21 @@
 // src/middleware/rate-limit.js
 import rateLimit from "express-rate-limit";
+import { RedisStore } from "rate-limit-redis";
+import { getRedisClient } from "../lib/redis.js";
+
+/**
+ * Counter store shared across instances: Redis when the shared client
+ * exists, express-rate-limit's in-memory default otherwise (tests). Each
+ * limiter gets its own prefix so windows never collide on one IP.
+ */
+const createStore = (prefix) => {
+  const client = getRedisClient();
+  if (!client) return undefined;
+  return new RedisStore({
+    prefix,
+    sendCommand: (command, ...args) => client.call(command, ...args),
+  });
+};
 
 // Shared 429 response shape — matches the app's error envelope so the client's
 // error extractor reads `message` the same way it does for every other error.
@@ -14,6 +30,8 @@ const rateLimitResponse = (message) => ({
  * each call sends an email and is the main abuse/enumeration vector.
  */
 export const passwordResetRequestLimiter = rateLimit({
+  store: createStore("rl:reset-req:"),
+  passOnStoreError: true,
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 5,
   standardHeaders: true,
@@ -28,6 +46,8 @@ export const passwordResetRequestLimiter = rateLimit({
  * of reset tokens, while staying lenient enough for normal retries.
  */
 export const passwordResetConfirmLimiter = rateLimit({
+  store: createStore("rl:reset-confirm:"),
+  passOnStoreError: true,
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 10,
   standardHeaders: true,
@@ -43,6 +63,8 @@ export const passwordResetConfirmLimiter = rateLimit({
  * password-guesser hits the wall.
  */
 export const loginLimiter = rateLimit({
+  store: createStore("rl:login:"),
+  passOnStoreError: true,
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 10,
   skipSuccessfulRequests: true,
@@ -51,5 +73,36 @@ export const loginLimiter = rateLimit({
   skip: () => process.env.NODE_ENV === "test",
   message: rateLimitResponse(
     "Too many failed login attempts. Please try again in a few minutes."
+  ),
+});
+
+/**
+ * OTP request/verify surfaces: tight windows because every request sends an
+ * SMS or email, and codes are 6 digits.
+ */
+export const otpRequestLimiter = rateLimit({
+  store: createStore("rl:otp-req:"),
+  passOnStoreError: true,
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === "test",
+  message: rateLimitResponse(
+    "Too many code requests. Please try again in a few minutes."
+  ),
+});
+
+export const otpVerifyLimiter = rateLimit({
+  store: createStore("rl:otp-verify:"),
+  passOnStoreError: true,
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  skipSuccessfulRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === "test",
+  message: rateLimitResponse(
+    "Too many attempts. Please try again in a few minutes."
   ),
 });

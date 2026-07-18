@@ -5,12 +5,16 @@
 // never processed twice.
 import { prisma } from "./src/config/prisma-client.js";
 import { startWorkers, stopWorkers } from "./src/jobs/lifecycle.js";
+import { closeRedisClient } from "./src/lib/redis.js";
+import { flushSentry, initSentry } from "./src/lib/sentry.js";
 import logger from "./src/utils/logger.js";
 
 startWorkers().catch((err) => {
   logger.error(err, "Failed to start worker");
   process.exit(1);
 });
+
+initSentry();
 
 let shuttingDown = false;
 
@@ -27,6 +31,8 @@ const shutdown = async (signal) => {
 
   try {
     await stopWorkers();
+    await closeRedisClient();
+    await flushSentry();
     await prisma.$disconnect();
     process.exit(0);
   } catch (error) {

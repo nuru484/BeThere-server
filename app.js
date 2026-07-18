@@ -16,7 +16,10 @@ import {
   NotFoundError,
 } from "./src/middleware/error-handler.js";
 import { prisma } from "./src/config/prisma-client.js";
+import { initSentry } from "./src/lib/sentry.js";
 import { v2 as cloudinary } from "cloudinary";
+
+initSentry();
 
 const app = express();
 
@@ -25,6 +28,9 @@ const allowedOrigins = new Set(
 );
 
 const corsOptions = {
+  // Auth lives in httpOnly cookies, so cross-origin requests must carry
+  // credentials and the origin allowlist does the gating.
+  credentials: true,
   origin: function (origin, callback) {
     if (!origin || allowedOrigins.has(origin)) {
       callback(null, true);

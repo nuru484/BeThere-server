@@ -1,4 +1,8 @@
 // src/middleware/jwt-authentication.js
+//
+// Cookie-only authentication: the access token lives in an httpOnly cookie
+// (never readable by page JavaScript), and every request re-checks the
+// principal's session epoch so revocation applies mid-token-lifetime.
 import ENV from "../config/env.js";
 import { prisma } from "../config/prisma-client.js";
 import { UnauthorizedError } from "./error-handler.js";
@@ -6,43 +10,38 @@ import {
   getCachedTokenVersion,
   setCachedTokenVersion,
 } from "../utils/authz-cache.js";
+import { CookieManager } from "../utils/cookie-manager.js";
 import { verifyJwtToken } from "../utils/verify-jwt-token.js";
 
-/**
- * The user's live session epoch, behind a short cache so the per-request
- * check doesn't hit the DB every time. A theft response or password change
- * bumps tokenVersion, so already-issued access tokens stop working at once
- * instead of riding out their 30 minutes. Returns null when the account no
- * longer exists (deleted accounts lose access immediately - findFirst keeps
- * the soft-delete scope).
- */
-const resolveLiveTokenVersion = async (userId) => {
-  const cached = getCachedTokenVersion(userId);
+const isKind = (value) => value === "ADMIN" || value === "USER";
+
+/** The principal's live epoch, behind the shared short cache. findFirst
+ * keeps the soft-delete scope: deleted accounts read as gone at once. */
+const resolveLiveTokenVersion = async (kind, id) => {
+  const cached = await getCachedTokenVersion(kind, id);
   if (cached !== undefined) return cached;
 
-  const user = await prisma.user.findFirst({
-    where: { id: userId },
+  const table = kind === "ADMIN" ? prisma.admin : prisma.user;
+  const principal = await table.findFirst({
+    where: { id },
     select: { tokenVersion: true },
   });
-  const version = user?.tokenVersion ?? null;
-  setCachedTokenVersion(userId, version);
+  const version = principal?.tokenVersion ?? null;
+  await setCachedTokenVersion(kind, id, version);
   return version;
 };
 
-// Middleware to authenticate users with an access token
 export const authenticateJWT = async (req, res, next) => {
-  const authHeader = req.headers.authorization;
+  const accessToken = CookieManager.getAccessToken(req);
 
-  if (!authHeader) {
+  if (!accessToken) {
     return next(
-      new UnauthorizedError("Authorization header missing", {
+      new UnauthorizedError("Not authenticated", {
         code: "NO_TOKEN",
         layer: "jwt",
       })
     );
   }
-
-  const accessToken = authHeader.split(" ")[1];
 
   try {
     const decodedUser = await verifyJwtToken(
@@ -50,9 +49,19 @@ export const authenticateJWT = async (req, res, next) => {
       ENV.ACCESS_TOKEN_SECRET
     );
 
-    // Enforce the session epoch: tokens minted before a revocation bump (or
-    // for a deleted account) are dead even though their signature is valid.
-    const liveVersion = await resolveLiveTokenVersion(decodedUser.id);
+    if (!isKind(decodedUser.kind)) {
+      return next(
+        new UnauthorizedError("Invalid access token", {
+          code: "INVALID_TOKEN",
+          layer: "jwt",
+        })
+      );
+    }
+
+    const liveVersion = await resolveLiveTokenVersion(
+      decodedUser.kind,
+      decodedUser.id
+    );
     if (liveVersion === null) {
       return next(
         new UnauthorizedError("Account no longer exists. Please log in.", {

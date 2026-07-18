@@ -1,24 +1,13 @@
 // src/controllers/refresh-jwt-token.js
 //
-// Thin adapter over the rotation service. The heavy lifting (jti consume,
-// replay-as-theft response, account re-validation) lives in
-// services/auth.service.js.
+// Cookie-based rotation: reads the refresh cookie, rotates it (consume +
+// successor), and re-sets both auth cookies. The body never carries tokens.
 import { asyncHandler, UnauthorizedError } from "../middleware/error-handler.js";
+import { CookieManager } from "../utils/cookie-manager.js";
 import { rotateRefreshToken } from "../services/auth.service.js";
 
 export const refreshToken = asyncHandler(async (req, res, _next) => {
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader) {
-    throw new UnauthorizedError("Authorization header missing", {
-      code: "NO_TOKEN",
-      layer: "jwt",
-    });
-  }
-
-  const token = authHeader.startsWith("Bearer ")
-    ? authHeader.split(" ")[1]
-    : authHeader;
+  const token = CookieManager.getRefreshToken(req);
 
   if (!token) {
     throw new UnauthorizedError("No refresh token provided", {
@@ -27,10 +16,11 @@ export const refreshToken = asyncHandler(async (req, res, _next) => {
     });
   }
 
-  const tokens = await rotateRefreshToken(token);
+  const result = await rotateRefreshToken(token);
 
+  CookieManager.setAuthCookies(res, result);
   res.json({
     message: "Token refreshed",
-    data: tokens,
+    data: { user: result.user },
   });
 });

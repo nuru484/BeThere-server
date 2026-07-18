@@ -25,16 +25,12 @@ export async function getUserById(actor, targetUserId) {
     throw new NotFoundError("User not found.");
   }
 
-  return toSafeUser(user);
+  return toSafeUser("USER", user);
 }
 
-/** Admin list with optional role filter and name/email/phone search. */
-export async function listUsers({ skip, limit, role, search }) {
+/** Admin list of attendants with name/email/phone search. */
+export async function listUsers({ skip, limit, search }) {
   const whereClause = {};
-
-  if (role) {
-    whereClause.role = role;
-  }
 
   if (search) {
     whereClause.OR = [
@@ -58,5 +54,5 @@ export async function listUsers({ skip, limit, role, search }) {
 
   // The raw 128-float biometric descriptor never leaves the server in bulk
   // responses - clients only need to know whether a face is enrolled.
-  return { users: users.map(toSafeUser), total };
+  return { users: users.map((u) => toSafeUser("USER", u)), total };
 }

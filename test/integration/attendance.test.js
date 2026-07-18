@@ -7,9 +7,9 @@ import { describe, expect, it } from "vitest";
 import request from "supertest";
 import app from "../../app.js";
 import {
-  accessTokenFor,
+  attendantCookie,
   createEventWithActiveSession,
-  createUser,
+  createAttendant,
   DESCRIPTOR,
   WRONG_DESCRIPTOR,
 } from "../helpers.js";
@@ -19,7 +19,7 @@ const LNG = -1.6244;
 
 describe("POST /api/v1/attendance/:eventId (check-in)", () => {
   it("checks in when the captured descriptor matches the enrolled one", async () => {
-    const user = await createUser({
+    const user = await createAttendant({
       email: "face@test.local",
       faceScan: DESCRIPTOR,
     });
@@ -27,7 +27,7 @@ describe("POST /api/v1/attendance/:eventId (check-in)", () => {
 
     const res = await request(app)
       .post(`/api/v1/attendance/${event.id}`)
-      .set("Authorization", `Bearer ${accessTokenFor(user)}`)
+      .set("Cookie", [attendantCookie(user)])
       .send({ latitude: LAT, longitude: LNG, faceDescriptor: DESCRIPTOR });
 
     expect(res.status).toBe(201);
@@ -35,7 +35,7 @@ describe("POST /api/v1/attendance/:eventId (check-in)", () => {
   });
 
   it("rejects a non-matching descriptor with 401", async () => {
-    const user = await createUser({
+    const user = await createAttendant({
       email: "face2@test.local",
       faceScan: DESCRIPTOR,
     });
@@ -43,7 +43,7 @@ describe("POST /api/v1/attendance/:eventId (check-in)", () => {
 
     const res = await request(app)
       .post(`/api/v1/attendance/${event.id}`)
-      .set("Authorization", `Bearer ${accessTokenFor(user)}`)
+      .set("Cookie", [attendantCookie(user)])
       .send({
         latitude: LAT,
         longitude: LNG,
@@ -55,7 +55,7 @@ describe("POST /api/v1/attendance/:eventId (check-in)", () => {
   });
 
   it("rejects a check-in without a descriptor (validation)", async () => {
-    const user = await createUser({
+    const user = await createAttendant({
       email: "face3@test.local",
       faceScan: DESCRIPTOR,
     });
@@ -63,19 +63,19 @@ describe("POST /api/v1/attendance/:eventId (check-in)", () => {
 
     const res = await request(app)
       .post(`/api/v1/attendance/${event.id}`)
-      .set("Authorization", `Bearer ${accessTokenFor(user)}`)
+      .set("Cookie", [attendantCookie(user)])
       .send({ latitude: LAT, longitude: LNG });
 
     expect(res.status).toBe(400);
   });
 
   it("rejects an account with no enrolled face with 400", async () => {
-    const user = await createUser({ email: "noface@test.local" });
+    const user = await createAttendant({ email: "noface@test.local" });
     const { event } = await createEventWithActiveSession();
 
     const res = await request(app)
       .post(`/api/v1/attendance/${event.id}`)
-      .set("Authorization", `Bearer ${accessTokenFor(user)}`)
+      .set("Cookie", [attendantCookie(user)])
       .send({ latitude: LAT, longitude: LNG, faceDescriptor: DESCRIPTOR });
 
     expect(res.status).toBe(400);
@@ -83,7 +83,7 @@ describe("POST /api/v1/attendance/:eventId (check-in)", () => {
   });
 
   it("rejects a check-in outside the 50m geofence", async () => {
-    const user = await createUser({
+    const user = await createAttendant({
       email: "far@test.local",
       faceScan: DESCRIPTOR,
     });
@@ -91,7 +91,7 @@ describe("POST /api/v1/attendance/:eventId (check-in)", () => {
 
     const res = await request(app)
       .post(`/api/v1/attendance/${event.id}`)
-      .set("Authorization", `Bearer ${accessTokenFor(user)}`)
+      .set("Cookie", [attendantCookie(user)])
       // ~1.1km north of the event location.
       .send({ latitude: LAT + 0.01, longitude: LNG, faceDescriptor: DESCRIPTOR });
 

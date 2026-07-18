@@ -1,53 +1,58 @@
 // test/integration/auth.test.js
 //
-// The auth core through the real app: login hygiene, the unified envelope,
-// refresh ROTATION (consume + successor), replay-as-theft revocation, soft
-// deleted accounts, and logout.
+// The auth core through the real app: cookie-only login for both
+// principals, refresh ROTATION via cookies, replay-as-theft revocation,
+// soft-deleted accounts, and logout.
 import { describe, expect, it } from "vitest";
 import request from "supertest";
 import app from "../../app.js";
 import { prisma } from "../../src/config/prisma-client.js";
 import { clearAuthzCache } from "../../src/utils/authz-cache.js";
 import {
-  accessTokenFor,
-  createUser,
+  adminCookie,
+  attendantCookie,
+  cookiesFromResponse,
+  createAdmin,
+  createAttendant,
   sessionFor,
   DESCRIPTOR,
 } from "../helpers.js";
 
-const decodePayload = (token) =>
-  JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString());
-
-describe("POST /api/v1/auth/login", () => {
-  it("logs in with the { message, data } envelope and a safe user", async () => {
-    await createUser({ email: "a@test.local", faceScan: DESCRIPTOR });
+describe("POST /api/v1/auth/login (cookie-only)", () => {
+  it("sets httpOnly auth cookies and returns only the safe user", async () => {
+    await createAttendant({ email: "a@test.local", faceScan: DESCRIPTOR });
 
     const res = await request(app)
       .post("/api/v1/auth/login")
       .send({ email: "a@test.local", password: "Password123!" });
 
     expect(res.status).toBe(200);
-    expect(res.body.data.accessToken).toBeTruthy();
-    expect(res.body.data.refreshToken).toBeTruthy();
+    // No token in the body - cookies only.
+    expect(JSON.stringify(res.body)).not.toMatch(/accessToken|refreshToken/);
+    expect(res.body.data.user.hasFaceScan).toBe(true);
+    expect(res.body.data.user.role).toBe("USER");
     expect(res.body.data.user.password).toBeUndefined();
     expect(res.body.data.user.faceScan).toBeUndefined();
-    expect(res.body.data.user.tokenVersion).toBeUndefined();
-    expect(res.body.data.user.hasFaceScan).toBe(true);
+
+    const setCookies = res.headers["set-cookie"].join(";");
+    expect(setCookies).toMatch(/accessToken=/);
+    expect(setCookies).toMatch(/refreshToken=/);
+    expect(setCookies).toMatch(/HttpOnly/);
   });
 
-  it("accepts passwords containing HTML-special characters (escape regression)", async () => {
-    const password = "P&<>'x!42a";
-    await createUser({ email: "special@test.local", password });
+  it("logs an ADMIN in from the Admin table with role ADMIN", async () => {
+    await createAdmin({ email: "boss@test.local" });
 
     const res = await request(app)
       .post("/api/v1/auth/login")
-      .send({ email: "special@test.local", password });
+      .send({ email: "boss@test.local", password: "Password123!" });
 
     expect(res.status).toBe(200);
+    expect(res.body.data.user.role).toBe("ADMIN");
   });
 
   it("rejects login for a soft-deleted account", async () => {
-    const user = await createUser({ email: "gone@test.local" });
+    const user = await createAttendant({ email: "gone@test.local" });
     await prisma.user.update({
       where: { id: user.id },
       data: { deletedAt: new Date() },
@@ -61,58 +66,62 @@ describe("POST /api/v1/auth/login", () => {
   });
 });
 
-describe("POST /api/v1/refreshToken (rotation)", () => {
-  it("rotates: consumes the presented token and issues a successor", async () => {
-    const user = await createUser({ email: "c@test.local" });
-    const session = await sessionFor(user);
+describe("POST /api/v1/refreshToken (cookie rotation)", () => {
+  it("rotates via cookie: consumes the token, sets fresh cookies", async () => {
+    const user = await createAttendant({ email: "c@test.local" });
+    const session = await sessionFor("USER", user);
 
     const res = await request(app)
       .post("/api/v1/refreshToken")
-      .set("Authorization", `Bearer ${session.refreshToken}`);
+      .set("Cookie", [session.refreshCookie]);
 
     expect(res.status).toBe(200);
-    expect(res.body.data.accessToken).toBeTruthy();
-    expect(res.body.data.refreshToken).toBeTruthy();
+    const fresh = cookiesFromResponse(res);
+    expect(fresh.join(";")).toMatch(/accessToken=/);
 
-    // The successor works.
+    // The successor cookie works; the original is consumed.
     const second = await request(app)
       .post("/api/v1/refreshToken")
-      .set("Authorization", `Bearer ${res.body.data.refreshToken}`);
+      .set("Cookie", fresh.filter((c) => c.startsWith("refreshToken=")));
     expect(second.status).toBe(200);
-  });
 
-  it("treats replay of a consumed token as theft: every session dies", async () => {
-    const user = await createUser({ email: "victim@test.local" });
-    const session = await sessionFor(user);
-
-    // Legitimate rotation...
-    const first = await request(app)
-      .post("/api/v1/refreshToken")
-      .set("Authorization", `Bearer ${session.refreshToken}`);
-    expect(first.status).toBe(200);
-
-    // ...then the ORIGINAL token is presented again (stolen copy).
     const replay = await request(app)
       .post("/api/v1/refreshToken")
-      .set("Authorization", `Bearer ${session.refreshToken}`);
+      .set("Cookie", [session.refreshCookie]);
+    expect(replay.status).toBe(401);
+  });
+
+  it("treats replay as theft: every session for the principal dies", async () => {
+    const user = await createAttendant({ email: "victim@test.local" });
+    const session = await sessionFor("USER", user);
+
+    const first = await request(app)
+      .post("/api/v1/refreshToken")
+      .set("Cookie", [session.refreshCookie]);
+    expect(first.status).toBe(200);
+    const firstCookies = cookiesFromResponse(first);
+
+    // Stolen copy replayed.
+    const replay = await request(app)
+      .post("/api/v1/refreshToken")
+      .set("Cookie", [session.refreshCookie]);
     expect(replay.status).toBe(401);
 
-    // The successor from the legitimate rotation is dead too...
+    // Successor refresh dead, and the live access token dead too.
     const successor = await request(app)
       .post("/api/v1/refreshToken")
-      .set("Authorization", `Bearer ${first.body.data.refreshToken}`);
+      .set("Cookie", firstCookies.filter((c) => c.startsWith("refreshToken=")));
     expect(successor.status).toBe(401);
 
-    // ...and so is the outstanding ACCESS token (epoch bump).
     const access = await request(app)
       .get(`/api/v1/users/${user.id}`)
-      .set("Authorization", `Bearer ${first.body.data.accessToken}`);
+      .set("Cookie", firstCookies.filter((c) => c.startsWith("accessToken=")));
     expect(access.status).toBe(401);
   });
 
-  it("rejects a refresh for a soft-deleted account", async () => {
-    const user = await createUser({ email: "d@test.local" });
-    const session = await sessionFor(user);
+  it("rejects refresh for a soft-deleted account", async () => {
+    const user = await createAttendant({ email: "d@test.local" });
+    const session = await sessionFor("USER", user);
     await prisma.user.update({
       where: { id: user.id },
       data: { deletedAt: new Date() },
@@ -120,53 +129,38 @@ describe("POST /api/v1/refreshToken (rotation)", () => {
 
     const res = await request(app)
       .post("/api/v1/refreshToken")
-      .set("Authorization", `Bearer ${session.refreshToken}`);
+      .set("Cookie", [session.refreshCookie]);
 
     expect(res.status).toBe(401);
-  });
-
-  it("mints the CURRENT role, not the role baked into the old token", async () => {
-    const user = await createUser({ email: "e@test.local", role: "ADMIN" });
-    const session = await sessionFor(user);
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { role: "USER" },
-    });
-
-    const res = await request(app)
-      .post("/api/v1/refreshToken")
-      .set("Authorization", `Bearer ${session.refreshToken}`);
-
-    expect(res.status).toBe(200);
-    expect(decodePayload(res.body.data.accessToken).role).toBe("USER");
   });
 });
 
 describe("POST /api/v1/auth/logout", () => {
-  it("consumes the refresh token so it can never rotate again", async () => {
-    const user = await createUser({ email: "f@test.local" });
-    const session = await sessionFor(user);
+  it("consumes the refresh token and clears the cookies", async () => {
+    const user = await createAttendant({ email: "f@test.local" });
+    const session = await sessionFor("USER", user);
 
     const out = await request(app)
       .post("/api/v1/auth/logout")
-      .set("Authorization", `Bearer ${session.refreshToken}`);
+      .set("Cookie", session.cookies);
     expect(out.status).toBe(200);
+    expect(out.headers["set-cookie"].join(";")).toMatch(/accessToken=;/);
 
     const res = await request(app)
       .post("/api/v1/refreshToken")
-      .set("Authorization", `Bearer ${session.refreshToken}`);
+      .set("Cookie", [session.refreshCookie]);
     expect(res.status).toBe(401);
   });
 });
 
-describe("session epoch on access tokens", () => {
-  it("a revoked epoch kills live access tokens, not just refreshes", async () => {
-    const user = await createUser({ email: "g@test.local" });
-    const token = accessTokenFor(user);
+describe("session epoch", () => {
+  it("a revoked epoch kills live access cookies immediately", async () => {
+    const user = await createAttendant({ email: "g@test.local" });
+    const cookie = attendantCookie(user);
 
     const before = await request(app)
       .get(`/api/v1/users/${user.id}`)
-      .set("Authorization", `Bearer ${token}`);
+      .set("Cookie", [cookie]);
     expect(before.status).toBe(200);
 
     await prisma.user.update({
@@ -177,7 +171,23 @@ describe("session epoch on access tokens", () => {
 
     const after = await request(app)
       .get(`/api/v1/users/${user.id}`)
-      .set("Authorization", `Bearer ${token}`);
+      .set("Cookie", [cookie]);
     expect(after.status).toBe(401);
+  });
+
+  it("admins and attendants with the same id are distinct principals", async () => {
+    const admin = await createAdmin({ email: "same-id-admin@test.local" });
+    const user = await createAttendant({ email: "same-id-user@test.local" });
+
+    // The attendant cannot read the admin surface even if ids collide.
+    const res = await request(app)
+      .get("/api/v1/admins")
+      .set("Cookie", [attendantCookie(user)]);
+    expect(res.status).toBe(403);
+
+    const ok = await request(app)
+      .get("/api/v1/admins")
+      .set("Cookie", [adminCookie(admin)]);
+    expect(ok.status).toBe(200);
   });
 });

@@ -4,7 +4,6 @@ const router = Router();
 import {
   addUser,
   updateUserProfile,
-  updateUserRole,
   getUserById,
   getAllUsers,
   deleteUser,
@@ -24,12 +23,6 @@ router.put(
   ...updateUserProfile
 );
 
-router.patch(
-  "/:userId/role",
-  authenticateJWT,
-  authorizeRole(["ADMIN"]),
-  updateUserRole
-);
 
 router.get(
   "/:userId",

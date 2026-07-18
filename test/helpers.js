@@ -13,12 +13,12 @@ export const DESCRIPTOR = Array.from({ length: 128 }, (_, i) =>
 /** A descriptor far outside the 0.6 match threshold of DESCRIPTOR. */
 export const WRONG_DESCRIPTOR = DESCRIPTOR.map((n) => n + 1);
 
-export async function createUser({
+export async function createAttendant({
   email = "user@test.local",
   password = "Password123!",
-  role = "USER",
   faceScan = null,
   phone = null,
+  twoFactorEnabled = false,
 } = {}) {
   const hashed = await bcrypt.hash(password, 10);
   return prisma.user.create({
@@ -27,24 +27,60 @@ export async function createUser({
       lastName: "User",
       email,
       password: hashed,
-      role,
       faceScan,
       phone,
+      twoFactorEnabled,
     },
   });
 }
 
-export function accessTokenFor(user) {
-  return jwt.sign(
-    { id: user.id, role: user.role, tv: user.tokenVersion ?? 0 },
+export async function createAdmin({
+  email = "admin@test.local",
+  password = "Password123!",
+  phone = null,
+  twoFactorEnabled = false,
+} = {}) {
+  const hashed = await bcrypt.hash(password, 10);
+  return prisma.admin.create({
+    data: {
+      firstName: "Test",
+      lastName: "Admin",
+      email,
+      password: hashed,
+      phone,
+      twoFactorEnabled,
+    },
+  });
+}
+
+/** Auth is cookie-only: a Cookie header value for the given principal. */
+export function accessCookieFor(kind, principal) {
+  const token = jwt.sign(
+    { id: principal.id, kind, role: kind, tv: principal.tokenVersion ?? 0 },
     ENV.ACCESS_TOKEN_SECRET,
     { expiresIn: "30m" }
   );
+  return `accessToken=${token}`;
 }
 
+export const adminCookie = (admin) => accessCookieFor("ADMIN", admin);
+export const attendantCookie = (user) => accessCookieFor("USER", user);
+
 /** A REAL session (registered refresh jti), as login would issue. */
-export function sessionFor(user) {
-  return issueSession(user);
+export async function sessionFor(kind, principal) {
+  const { accessToken, refreshToken } = await issueSession(kind, principal);
+  return {
+    accessToken,
+    refreshToken,
+    cookies: [`accessToken=${accessToken}`, `refreshToken=${refreshToken}`],
+    refreshCookie: `refreshToken=${refreshToken}`,
+  };
+}
+
+/** Pulls Set-Cookie values from a supertest response into a Cookie header. */
+export function cookiesFromResponse(res) {
+  const setCookies = res.headers["set-cookie"] ?? [];
+  return setCookies.map((c) => c.split(";")[0]);
 }
 
 /**

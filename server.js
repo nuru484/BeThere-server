@@ -8,6 +8,8 @@ import app from "./app.js";
 import ENV from "./src/config/env.js";
 import { prisma } from "./src/config/prisma-client.js";
 import { startWorkers, stopWorkers } from "./src/jobs/lifecycle.js";
+import { closeRedisClient } from "./src/lib/redis.js";
+import { flushSentry } from "./src/lib/sentry.js";
 import logger from "./src/utils/logger.js";
 
 const port = ENV.PORT;
@@ -43,6 +45,8 @@ const shutdown = async (signal) => {
       server.close(() => resolve());
     });
     await stopWorkers();
+    await closeRedisClient();
+    await flushSentry();
     await prisma.$disconnect();
     logger.info("Shutdown complete");
     process.exit(0);

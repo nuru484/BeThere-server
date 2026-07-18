@@ -4,8 +4,10 @@
 import { asyncHandler } from "../../middleware/error-handler.js";
 import { HTTP_STATUS_CODES } from "../../config/constants.js";
 import * as dashboardUserService from "../../services/dashboard-user.service.js";
+import { assertAttendant } from "../../utils/authorization.js";
 
 export const getUserDashboardTotals = asyncHandler(async (req, res, _next) => {
+  assertAttendant(req.user);
   const data = await dashboardUserService.getUserDashboardTotals();
 
   res.status(HTTP_STATUS_CODES.OK).json({

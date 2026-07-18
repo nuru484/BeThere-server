@@ -1,5 +1,6 @@
 // src/middleware/error-handler.js
 import logger from "../utils/logger.js";
+import { captureError } from "../lib/sentry.js";
 import ENV from "../config/env.js";
 import { handlePrismaError, isPrismaError } from "./prisma-error-handler.js";
 
@@ -106,6 +107,16 @@ export const errorHandler = (error, req, res, _next) => {
     layer = processedError.layer;
     code = processedError.code;
     context = processedError.context;
+  }
+
+  // Only genuine failures reach the tracker - expected 4xx noise stays out.
+  if (status >= 500 || severity === ErrorSeverity.HIGH) {
+    captureError(processedError, {
+      errorId,
+      method: req.method,
+      path: req.path,
+      status,
+    });
   }
 
   // Logging details

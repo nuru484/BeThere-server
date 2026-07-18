@@ -1,18 +1,26 @@
 // src/services/password-reset.service.js
 //
-// Domain logic for the password reset flow. Controllers stay thin: they parse
-// the request, call these functions, and shape the HTTP response. Everything
-// security-sensitive (token hashing, expiry, single-use, enumeration safety)
-// lives here so it is defined once and reused (HTTP route + future callers).
+// Domain logic for the password reset flow, for BOTH principals (admins and
+// attendants). Controllers stay thin. Everything security-sensitive (token
+// hashing, expiry, single-use, enumeration safety) lives here so it is
+// defined once. Reset rows carry (kind, principalId) because the two
+// principal tables have overlapping ids.
 import crypto from "crypto";
 import bcrypt from "bcrypt";
 import path from "path";
 import { fileURLToPath } from "url";
 import { prisma } from "../config/prisma-client.js";
 import { BCRYPT_SALT_ROUNDS } from "../config/constants.js";
-import { ValidationError, BadRequestError } from "../middleware/error-handler.js";
+import {
+  ValidationError,
+  BadRequestError,
+} from "../middleware/error-handler.js";
 import sendPasswordResetEmail from "../utils/sendMail.js";
-import { revokeAllSessions } from "./auth.service.js";
+import {
+  findPrincipal,
+  findPrincipalByEmail,
+  revokeAllSessions,
+} from "./auth.service.js";
 import ENV from "../config/env.js";
 import logger from "../utils/logger.js";
 
@@ -26,44 +34,49 @@ const hashResetToken = (rawToken) =>
   crypto.createHash("sha256").update(rawToken).digest("hex");
 
 /**
- * Loads a reset request by raw token and asserts it is usable.
- * Throws BadRequestError (with a deliberately generic message) when the token
- * is unknown, already used, or expired — never revealing which.
- * @returns the reset record including its related user.
+ * Loads a reset request by raw token, asserts it is usable, and resolves
+ * its principal. Throws a deliberately generic BadRequestError when the
+ * token is unknown, used, expired, or its account is gone - never revealing
+ * which.
  */
-const getUsableResetRequest = async (rawToken, includeFullUser = false) => {
+const getUsableResetRequest = async (rawToken) => {
   const tokenHash = hashResetToken(rawToken);
 
   const resetRequest = await prisma.passwordReset.findUnique({
     where: { tokenHash },
-    include: {
-      user: includeFullUser
-        ? true
-        : { select: { id: true, email: true, firstName: true } },
-    },
   });
 
-  if (!resetRequest || resetRequest.usedAt || new Date() > resetRequest.expiresAt) {
+  const invalid = () => {
     throw new BadRequestError(
       "Invalid or expired password reset link. Please request a new one."
     );
+  };
+
+  if (!resetRequest || resetRequest.usedAt || new Date() > resetRequest.expiresAt) {
+    invalid();
   }
 
-  return resetRequest;
+  const principal = await findPrincipal(
+    resetRequest.kind,
+    resetRequest.principalId
+  );
+  if (!principal) invalid();
+
+  return { resetRequest, principal };
 };
 
-/** Sends the reset email; failures are logged but never surfaced to the caller. */
-const sendResetEmail = async (user, rawToken) => {
+/** Sends the reset email; failures are logged but never surfaced. */
+const sendResetEmail = async (principal, rawToken) => {
   const resetLink = `${ENV.FRONTEND_URL}/reset-password?token=${rawToken}`;
 
   try {
     await sendPasswordResetEmail({
-      email: user.email,
+      email: principal.email,
       subject: "Password Reset - BeThere",
       template: "reset-password.ejs",
       data: {
-        userFirstName: user.firstName,
-        userLastName: user.lastName,
+        userFirstName: principal.firstName,
+        userLastName: principal.lastName,
         resetLink,
       },
       attachments: [
@@ -80,22 +93,24 @@ const sendResetEmail = async (user, rawToken) => {
 };
 
 /**
- * Starts a password reset: invalidates any outstanding tokens for the user,
- * issues a fresh single-use token, and emails the reset link.
- *
- * Returns nothing and never throws on a missing account — the caller always
- * responds with the same generic message to avoid email enumeration.
+ * Starts a password reset for whichever principal owns the email (admins
+ * first). Never throws on a missing account - the caller always responds
+ * with the same generic message to avoid enumeration.
  */
 export const requestPasswordReset = async (email) => {
-  const user = await prisma.user.findUnique({
-    where: { email: email.toLowerCase() },
-  });
+  const resolved = await findPrincipalByEmail(email.toLowerCase());
+  if (!resolved) return;
 
-  if (!user) return;
+  const { kind, principal } = resolved;
 
   // Invalidate any still-active tokens before issuing a new one.
   await prisma.passwordReset.updateMany({
-    where: { userId: user.id, usedAt: null, expiresAt: { gte: new Date() } },
+    where: {
+      kind,
+      principalId: principal.id,
+      usedAt: null,
+      expiresAt: { gte: new Date() },
+    },
     data: { usedAt: new Date() },
   });
 
@@ -103,44 +118,41 @@ export const requestPasswordReset = async (email) => {
 
   await prisma.passwordReset.create({
     data: {
-      userId: user.id,
+      kind,
+      principalId: principal.id,
       tokenHash: hashResetToken(rawToken),
       expiresAt: new Date(Date.now() + RESET_TOKEN_TTL_MS),
     },
   });
 
-  await sendResetEmail(user, rawToken);
+  await sendResetEmail(principal, rawToken);
 };
 
 /**
  * Verifies a reset token without consuming it (for the "enter new password"
  * screen). Throws BadRequestError when the token is not usable.
- * @returns minimal user info to greet the user.
  */
 export const verifyResetToken = async (rawToken) => {
-  const resetRequest = await getUsableResetRequest(rawToken);
+  const { principal } = await getUsableResetRequest(rawToken);
   return {
-    email: resetRequest.user.email,
-    firstName: resetRequest.user.firstName,
+    email: principal.email,
+    firstName: principal.firstName,
   };
 };
 
 /**
- * Completes a password reset. Validates the confirmation, rejects reusing the
- * current password, then atomically sets the new password, consumes the token,
- * and invalidates the user's other outstanding tokens.
+ * Completes a password reset: validates the confirmation, rejects reusing
+ * the current password, atomically sets the new password and consumes the
+ * token, then revokes every outstanding session for the account.
  */
 export const resetPassword = async ({ token, newPassword, confirmPassword }) => {
   if (newPassword !== confirmPassword) {
     throw new ValidationError("Passwords do not match.");
   }
 
-  const resetRequest = await getUsableResetRequest(token, true);
+  const { resetRequest, principal } = await getUsableResetRequest(token);
 
-  const isSamePassword = await bcrypt.compare(
-    newPassword,
-    resetRequest.user.password
-  );
+  const isSamePassword = await bcrypt.compare(newPassword, principal.password);
   if (isSamePassword) {
     throw new BadRequestError(
       "New password must be different from your current password."
@@ -148,10 +160,11 @@ export const resetPassword = async ({ token, newPassword, confirmPassword }) => 
   }
 
   const hashedPassword = await bcrypt.hash(newPassword, BCRYPT_SALT_ROUNDS);
+  const table = resetRequest.kind === "ADMIN" ? prisma.admin : prisma.user;
 
   await prisma.$transaction([
-    prisma.user.update({
-      where: { id: resetRequest.userId },
+    table.update({
+      where: { id: resetRequest.principalId },
       data: { password: hashedPassword },
     }),
     prisma.passwordReset.update({
@@ -160,7 +173,8 @@ export const resetPassword = async ({ token, newPassword, confirmPassword }) => 
     }),
     prisma.passwordReset.updateMany({
       where: {
-        userId: resetRequest.userId,
+        kind: resetRequest.kind,
+        principalId: resetRequest.principalId,
         id: { not: resetRequest.id },
         usedAt: null,
       },
@@ -170,12 +184,12 @@ export const resetPassword = async ({ token, newPassword, confirmPassword }) => 
 
   // A reset usually means the old credential is suspect - kill every
   // outstanding session along with it.
-  await revokeAllSessions(resetRequest.userId);
+  await revokeAllSessions(resetRequest.kind, resetRequest.principalId);
 };
 
 /**
- * Removes expired reset tokens. Invoked by a scheduled background job, not over
- * HTTP. Returns the number of rows deleted.
+ * Removes expired reset tokens. Invoked by a scheduled background job.
+ * Returns the number of rows deleted.
  */
 export const cleanupExpiredResetTokens = async () => {
   const { count } = await prisma.passwordReset.deleteMany({

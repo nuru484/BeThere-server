@@ -9,6 +9,7 @@ import { HTTP_STATUS_CODES } from "../config/constants.js";
 import { faceScanValidation } from "../validation/face-scan-validation.js";
 import { validationMiddleware } from "../validation/validation-error-handler.js";
 import * as faceScanService from "../services/face-scan.service.js";
+import { assertAttendant } from "../utils/authorization.js";
 
 const parseUserId = (userId) => {
   if (!userId || isNaN(parseInt(userId))) {
@@ -18,6 +19,7 @@ const parseUserId = (userId) => {
 };
 
 const handleAddFaceScan = asyncHandler(async (req, res, _next) => {
+  assertAttendant(req.user, "Only attendants can enroll a face scan.");
   const updatedUser = await faceScanService.addFaceScan(
     parseInt(req.user.id),
     req.body.faceScan

@@ -6,9 +6,48 @@ datasource db {
   provider = "postgresql"
 }
 
-enum role {
-  ADMIN
-  USER
+
+// Staff principal, separate from attendants: different lifecycle, no
+// attendance or biometrics. Ids overlap with User ids, so tokens and
+// security rows always carry a `kind` alongside the id.
+model Admin {
+  id             Int     @id @default(autoincrement())
+  firstName      String  @db.VarChar(255)
+  lastName       String  @db.VarChar(255)
+  password       String
+  email          String  @unique
+  profilePicture String? @db.VarChar(255)
+  phone          String? @unique
+
+  twoFactorEnabled Boolean @default(false)
+
+  tokenVersion Int @default(0)
+  deletedAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([deletedAt])
+}
+
+// Hashed single-use codes for OTP login (attendants) and the 2FA second
+// factor (both principals). Modeled on PasswordReset: sha256 code hash,
+// short TTL, attempt cap, consumed-at.
+model OtpCode {
+  id          Int       @id @default(autoincrement())
+  kind        String // "ADMIN" | "USER"
+  principalId Int
+  purpose     String // "LOGIN" | "TWO_FACTOR"
+  channel     String // "SMS" | "EMAIL"
+  codeHash    String
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  attempts    Int       @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([kind, principalId, purpose])
+  @@index([expiresAt])
 }
 
 model User {
@@ -20,7 +59,10 @@ model User {
   profilePicture String? @db.VarChar(255)
   phone          String? @unique
   faceScan       Json?
-  role           role    @default(USER)
+
+  twoFactorEnabled Boolean @default(false)
+  /** Set once the phone has received and confirmed an OTP. */
+  phoneVerified    Boolean @default(false)
 
   // Session epoch: bumped on refresh-token theft detection or forced logout,
   // which invalidates every outstanding token minted before the bump.
@@ -33,48 +75,43 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  Attendance     Attendance[]
-  passwordResets PasswordReset[]
-  refreshTokens  RefreshToken[]
+  Attendance Attendance[]
 
   // Intentional indexes only: id/email/phone were redundant (PK and @unique
   // already index). deletedAt supports the soft-delete scoping every read
-  // now carries; role supports the admin list filter.
+  // now carries.
   @@index([deletedAt])
-  @@index([role])
 }
 
 // One row per outstanding refresh token (hashed jti). Rotation consumes the
 // row and issues a successor; presenting a consumed jti again is treated as
 // theft and bumps the user's tokenVersion, killing every live session.
 model RefreshToken {
-  id         Int       @id @default(autoincrement())
-  userId     Int
-  jtiHash    String    @unique
-  expiresAt  DateTime
-  consumedAt DateTime?
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  id          Int       @id @default(autoincrement())
+  kind        String // "ADMIN" | "USER"
+  principalId Int
+  jtiHash     String    @unique
+  expiresAt   DateTime
+  consumedAt  DateTime?
 
   createdAt DateTime @default(now())
 
-  @@index([userId])
+  @@index([kind, principalId])
   @@index([expiresAt])
 }
 
 model PasswordReset {
-  id        Int       @id @default(autoincrement())
-  userId    Int
-  tokenHash String    @unique
-  expiresAt DateTime
-  usedAt    DateTime?
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  id          Int       @id @default(autoincrement())
+  kind        String // "ADMIN" | "USER"
+  principalId Int
+  tokenHash   String    @unique
+  expiresAt   DateTime
+  usedAt      DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([userId])
+  @@index([kind, principalId])
   @@index([expiresAt])
 }
 

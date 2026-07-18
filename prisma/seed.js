@@ -1,5 +1,5 @@
 // prisma/seed.ts
-import { role, AttendanceStatus } from "@prisma/client";
+import { AttendanceStatus } from "@prisma/client";
 import { prisma } from "../src/config/prisma-client.js";
 import * as bcrypt from "bcrypt";
 import logger from "../src/utils/logger.js";
@@ -35,13 +35,12 @@ async function main() {
 
   const hashedPassword = await bcrypt.hash(adminPassword, 10);
 
-  const admin = await prisma.user.upsert({
+  const admin = await prisma.admin.upsert({
     where: { email: adminEmail },
     update: {
       firstName: adminFirstName,
       lastName: adminLastName,
       password: hashedPassword,
-      role: role.ADMIN,
       phone: adminPhone,
       updatedAt: new Date(),
     },
@@ -50,7 +49,6 @@ async function main() {
       firstName: adminFirstName,
       lastName: adminLastName,
       password: hashedPassword,
-      role: role.ADMIN,
       phone: adminPhone,
     },
   });
@@ -62,7 +60,6 @@ async function main() {
       email: admin.email,
       firstName: admin.firstName,
       lastName: admin.lastName,
-      role: admin.role,
     },
   });
 
@@ -78,7 +75,6 @@ async function main() {
         firstName: "John",
         lastName: "Doe",
         password: regularPassword,
-        role: role.USER,
         phone: "+233201234567",
       },
     }),
@@ -90,7 +86,6 @@ async function main() {
         firstName: "Jane",
         lastName: "Smith",
         password: regularPassword,
-        role: role.USER,
         phone: "+233201234568",
       },
     }),
@@ -102,7 +97,6 @@ async function main() {
         firstName: "Michael",
         lastName: "Brown",
         password: regularPassword,
-        role: role.USER,
         phone: "+233201234569",
       },
     }),
@@ -114,7 +108,6 @@ async function main() {
         firstName: "Sarah",
         lastName: "Johnson",
         password: regularPassword,
-        role: role.USER,
         phone: "+233201234570",
       },
     }),
@@ -126,7 +119,6 @@ async function main() {
         firstName: "David",
         lastName: "Wilson",
         password: regularPassword,
-        role: role.USER,
         phone: "+233201234571",
       },
     }),
