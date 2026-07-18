@@ -1,69 +1,65 @@
-import express from "express";
+// server.js
+//
+// Web entrypoint: boots the Express app, optionally runs the BullMQ workers
+// in-process (default - set WEB_DISABLE_WORKERS=true when a dedicated worker
+// process runs `npm run worker`), and shuts down gracefully on SIGTERM/SIGINT
+// so deploys never sever in-flight requests.
+import app from "./app.js";
 import ENV from "./src/config/env.js";
-import cookieParser from "cookie-parser";
-import cors from "cors";
-import morgan from "morgan";
-import routes from "./src/routes/index.js";
-import {
-  UnauthorizedError,
-  errorHandler,
-  NotFoundError,
-} from "./src/middleware/error-handler.js";
+import { prisma } from "./src/config/prisma-client.js";
+import { startWorkers, stopWorkers } from "./src/jobs/lifecycle.js";
 import logger from "./src/utils/logger.js";
-import { v2 as cloudinary } from "cloudinary";
-import "./worker.js";
 
-const app = express();
-
-const allowedOrigins = new Set(
-  process.env.CORS_ACCESS ? process.env.CORS_ACCESS.split(",") : []
-);
-
-const corsOptions = {
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.has(origin)) {
-      callback(null, true);
-    } else {
-      callback(new UnauthorizedError("Not allowed by CORS"));
-    }
-  },
-};
-
-app.use(cors(corsOptions));
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
-app.use(cookieParser());
-app.set("trust proxy", true);
-app.use(morgan(":method :url :status :response-time ms"));
-
-app.use("/api/v1", routes);
-
-app.get("/", (req, res, _next) => {
-  res.status(200).json({
-    success: true,
-    message: "API is working",
-  });
-});
-
-// Unknown route
-app.use((req, res, next) => {
-  const error = new NotFoundError(`Route ${req.originalUrl} not found`);
-  next(error);
-});
-
-app.use(errorHandler);
-
-cloudinary.config({
-  cloud_name: ENV.CLOUDINARY_CLOUD_NAME,
-  api_key: ENV.CLOUDINARY_API_KEY,
-  api_secret: ENV.CLOUDINARY_API_SECRET,
-});
-
-const port = ENV.PORT || 3000;
-app.listen(port, () => {
+const port = ENV.PORT;
+const server = app.listen(port, () => {
   const message =
     ENV.NODE_ENV === "production"
       ? `App is running in production mode on port ${port}`
       : `App is listening on http://localhost:${port}`;
   logger.info(message);
+});
+
+if (!ENV.WEB_DISABLE_WORKERS) {
+  startWorkers().catch((err) => {
+    logger.error(err, "Failed to start background workers");
+  });
+}
+
+let shuttingDown = false;
+
+const shutdown = async (signal) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info(`${signal} received, shutting down gracefully...`);
+
+  const forceExit = setTimeout(() => {
+    logger.error("Graceful shutdown timed out; forcing exit");
+    process.exit(1);
+  }, 30_000);
+  forceExit.unref();
+
+  try {
+    await new Promise((resolve) => {
+      server.close(() => resolve());
+    });
+    await stopWorkers();
+    await prisma.$disconnect();
+    logger.info("Shutdown complete");
+    process.exit(0);
+  } catch (error) {
+    logger.error(error, "Error during shutdown");
+    process.exit(1);
+  }
+};
+
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
+
+process.on("unhandledRejection", (reason) => {
+  logger.error(reason, "Unhandled promise rejection");
+});
+
+process.on("uncaughtException", (error) => {
+  logger.fatal(error, "Uncaught exception");
+  void shutdown("uncaughtException");
 });

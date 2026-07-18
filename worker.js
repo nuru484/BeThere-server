@@ -1,70 +1,39 @@
 // worker.js
-import { sessionWorker } from "./src/jobs/session-worker.js";
-import {
-  sessionSchedulerQueue,
-  scheduleUpcomingSessions,
-} from "./src/jobs/session-scheduler.js";
-import { tokenCleanupQueue } from "./src/jobs/token-cleanup.js";
-import { cleanupExpiredResetTokens } from "./src/services/password-reset.service.js";
+//
+// Dedicated worker entrypoint (`npm run worker`). When this process is
+// deployed, set WEB_DISABLE_WORKERS=true on the web process so jobs are
+// never processed twice.
+import { prisma } from "./src/config/prisma-client.js";
+import { startWorkers, stopWorkers } from "./src/jobs/lifecycle.js";
 import logger from "./src/utils/logger.js";
-import { Worker } from "bullmq";
-import { createRedisConnection } from "./src/config/redis-connection.js";
 
-logger.info("🚀 Session worker started and listening for jobs...");
-
-// Run the scheduler immediately on startup
-scheduleUpcomingSessions().catch(logger.error);
-
-// Schedule the checker to run daily at midnight
-sessionSchedulerQueue.add(
-  "dailyCheck",
-  {},
-  {
-    repeat: {
-      pattern: "0 0 * * *", // Every day at midnight
-    },
-  }
-);
-
-// Worker to handle the scheduled daily checks
-const schedulerWorker = new Worker(
-  "sessionScheduler",
-  async () => {
-    await scheduleUpcomingSessions();
-  },
-  {
-    connection: createRedisConnection(),
-  }
-);
-
-// Schedule expired password-reset-token cleanup daily at 03:00
-tokenCleanupQueue.add(
-  "dailyCleanup",
-  {},
-  {
-    repeat: {
-      pattern: "0 3 * * *",
-    },
-  }
-);
-
-// Worker to remove expired password reset tokens
-const tokenCleanupWorker = new Worker(
-  "tokenCleanup",
-  async () => {
-    const count = await cleanupExpiredResetTokens();
-    logger.info(`🧹 Cleaned up ${count} expired password reset token(s)`);
-  },
-  {
-    connection: createRedisConnection(),
-  }
-);
-
-// Graceful shutdown
-process.on("SIGINT", async () => {
-  logger.info("🛑 Shutting down workers...");
-  await sessionWorker.close();
-  await schedulerWorker.close();
-  await tokenCleanupWorker.close();
-  process.exit(0);
+startWorkers().catch((err) => {
+  logger.error(err, "Failed to start worker");
+  process.exit(1);
 });
+
+let shuttingDown = false;
+
+const shutdown = async (signal) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info(`${signal} received, shutting down workers...`);
+
+  const forceExit = setTimeout(() => {
+    logger.error("Graceful shutdown timed out; forcing exit");
+    process.exit(1);
+  }, 30_000);
+  forceExit.unref();
+
+  try {
+    await stopWorkers();
+    await prisma.$disconnect();
+    process.exit(0);
+  } catch (error) {
+    logger.error(error, "Error during worker shutdown");
+    process.exit(1);
+  }
+};
+
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
