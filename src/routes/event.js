@@ -5,7 +5,6 @@ import {
   createEvent,
   updateEvent,
   deleteEvent,
-  deleteAllEvents,
   getEventById,
   getAllEvents,
 } from "../controllers/index.js";
@@ -28,7 +27,6 @@ router.delete(
   deleteEvent
 );
 
-router.delete("/", authenticateJWT, authorizeRole(["ADMIN"]), deleteAllEvents);
 
 router.get(
   "/:eventId",

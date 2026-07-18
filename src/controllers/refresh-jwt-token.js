@@ -1,71 +1,36 @@
-import jwt from "jsonwebtoken";
-import ENV from "../config/env.js";
-import { verifyJwtToken } from "../utils/verify-jwt-token.js";
+// src/controllers/refresh-jwt-token.js
+//
+// Thin adapter over the rotation service. The heavy lifting (jti consume,
+// replay-as-theft response, account re-validation) lives in
+// services/auth.service.js.
+import { asyncHandler, UnauthorizedError } from "../middleware/error-handler.js";
+import { rotateRefreshToken } from "../services/auth.service.js";
 
-export const refreshToken = async (req, res, next) => {
+export const refreshToken = asyncHandler(async (req, res, _next) => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader) {
-    return res
-      .status(401)
-      .json({ message: "Authorization header missing", type: "NO_TOKEN" });
+    throw new UnauthorizedError("Authorization header missing", {
+      code: "NO_TOKEN",
+      layer: "jwt",
+    });
   }
 
-  const refreshToken = authHeader.startsWith("Bearer ")
+  const token = authHeader.startsWith("Bearer ")
     ? authHeader.split(" ")[1]
     : authHeader;
 
-  if (!refreshToken) {
-    return res
-      .status(401)
-      .json({ message: "No refresh token provided", type: "NO_TOKEN" });
+  if (!token) {
+    throw new UnauthorizedError("No refresh token provided", {
+      code: "NO_TOKEN",
+      layer: "jwt",
+    });
   }
 
-  try {
-    const decodedUser = await verifyJwtToken(
-      refreshToken,
-      ENV.REFRESH_TOKEN_SECRET
-    );
+  const tokens = await rotateRefreshToken(token);
 
-    if (!decodedUser || !decodedUser.id) {
-      return res.status(401).json({
-        message: "Invalid refresh token payload",
-        type: "INVALID_TOKEN",
-      });
-    }
-
-    const newRefreshToken = jwt.sign(
-      { id: decodedUser.id, role: decodedUser.role },
-      ENV.REFRESH_TOKEN_SECRET,
-      {
-        expiresIn: "7d",
-      }
-    );
-
-    const newAccessToken = jwt.sign(
-      { id: decodedUser.id, role: decodedUser.role },
-      ENV.ACCESS_TOKEN_SECRET,
-      {
-        expiresIn: "30m",
-      }
-    );
-
-    req.user = decodedUser;
-
-    return res.json({ newAccessToken, newRefreshToken });
-  } catch (error) {
-    if (error.name === "TokenExpiredError") {
-      return res.status(401).json({
-        message: "Refresh token expired. Please log in again.",
-        type: "TOKEN_EXPIRED",
-      });
-    }
-
-    if (error.name === "JsonWebTokenError") {
-      return res
-        .status(401)
-        .json({ message: "Invalid refresh token", type: "INVALID_TOKEN" });
-    }
-    next(error);
-  }
-};
+  res.json({
+    message: "Token refreshed",
+    data: tokens,
+  });
+});

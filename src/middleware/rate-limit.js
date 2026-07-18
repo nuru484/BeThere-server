@@ -36,3 +36,20 @@ export const passwordResetConfirmLimiter = rateLimit({
     "Too many attempts. Please try again in a few minutes."
   ),
 });
+
+/**
+ * Brute-force cap for login: only FAILED attempts count toward the limit, so
+ * a legitimate user signing in all day never locks themselves out while a
+ * password-guesser hits the wall.
+ */
+export const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10,
+  skipSuccessfulRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === "test",
+  message: rateLimitResponse(
+    "Too many failed login attempts. Please try again in a few minutes."
+  ),
+});

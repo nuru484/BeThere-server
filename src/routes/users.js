@@ -8,7 +8,6 @@ import {
   getUserById,
   getAllUsers,
   deleteUser,
-  deleteAllUsers,
   changePassword,
   updateProfilePicture,
 } from "../controllers/index.js";
@@ -55,7 +54,6 @@ router.patch(
   ...changePassword
 );
 
-router.delete("/", authenticateJWT, authorizeRole(["ADMIN"]), deleteAllUsers);
 
 router.patch(
   "/:userId/profile-picture",

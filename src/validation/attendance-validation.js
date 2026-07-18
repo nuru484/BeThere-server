@@ -14,6 +14,19 @@ export const createAttendanceValidation = [
     .isFloat({ min: -180, max: 180 })
     .withMessage("Longitude must be a number between -180 and 180.")
     .toFloat(),
+
+  // The captured face-api descriptor: verification runs server-side against
+  // the enrolled descriptor, so check-in cannot be faked by skipping the
+  // camera flow.
+  body("faceDescriptor")
+    .exists()
+    .withMessage("Face descriptor is required.")
+    .isArray({ min: 128, max: 128 })
+    .withMessage("Face descriptor must be an array of 128 numbers."),
+  body("faceDescriptor.*")
+    .isFloat()
+    .withMessage("Face descriptor must contain only numbers.")
+    .toFloat(),
 ];
 
 export const updateAttendanceValidation = [

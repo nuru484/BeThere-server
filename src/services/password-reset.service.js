@@ -12,6 +12,7 @@ import { prisma } from "../config/prisma-client.js";
 import { BCRYPT_SALT_ROUNDS } from "../config/constants.js";
 import { ValidationError, BadRequestError } from "../middleware/error-handler.js";
 import sendPasswordResetEmail from "../utils/sendMail.js";
+import { revokeAllSessions } from "./auth.service.js";
 import ENV from "../config/env.js";
 import logger from "../utils/logger.js";
 
@@ -166,6 +167,10 @@ export const resetPassword = async ({ token, newPassword, confirmPassword }) => 
       data: { usedAt: new Date() },
     }),
   ]);
+
+  // A reset usually means the old credential is suspect - kill every
+  // outstanding session along with it.
+  await revokeAllSessions(resetRequest.userId);
 };
 
 /**

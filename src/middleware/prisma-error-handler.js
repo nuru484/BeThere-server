@@ -96,8 +96,6 @@ const handleUniqueConstraintError = (error) => {
       message = "An account with this email already exists";
     } else if (fields.includes("username")) {
       message = "This username is already taken";
-    } else if (fields.includes("userId") && fields.includes("flightId")) {
-      message = "You have already booked this flight";
     } else if (fields.includes("phoneNumber")) {
       message = "This phone number is already registered";
     } else {
@@ -268,15 +266,4 @@ export const handlePrismaError = (error) => {
     severity: ErrorSeverity.HIGH,
     code: "UNKNOWN_DB_ERROR",
   });
-};
-
-/**
- * Wrapper for Prisma operations with automatic error handling
- */
-export const prismaErrorWrapper = async (operation) => {
-  try {
-    return await operation();
-  } catch (error) {
-    throw handlePrismaError(error);
-  }
 };

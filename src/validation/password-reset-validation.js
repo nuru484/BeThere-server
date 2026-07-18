@@ -1,4 +1,5 @@
 import { body } from "express-validator";
+import { passwordRule } from "./password-rules.js";
 import { query } from "express-validator";
 
 export const requestPasswordResetValidation = [
@@ -25,11 +26,7 @@ export const resetPasswordValidation = [
     .isLength({ min: 64, max: 64 })
     .withMessage("Invalid token format."),
 
-  body("newPassword")
-    .exists({ checkFalsy: true })
-    .withMessage("New password is required.")
-    .isLength({ min: 8 })
-    .withMessage("Password must be at least 8 characters long."),
+  passwordRule("newPassword"),
 
   body("confirmPassword")
     .exists({ checkFalsy: true })
