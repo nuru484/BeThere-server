@@ -1,56 +1,33 @@
-import { prisma } from "../config/prisma-client.js";
+// src/controllers/facescan.js
+//
+// Thin HTTP adapters over the face-scan service.
 import {
   asyncHandler,
-  ConflictError,
   ValidationError,
-  UnauthorizedError,
-  NotFoundError,
 } from "../middleware/error-handler.js";
+import { HTTP_STATUS_CODES } from "../config/constants.js";
 import { faceScanValidation } from "../validation/face-scan-validation.js";
 import { validationMiddleware } from "../validation/validation-error-handler.js";
+import * as faceScanService from "../services/face-scan.service.js";
+
+const parseUserId = (userId) => {
+  if (!userId || isNaN(parseInt(userId))) {
+    throw new ValidationError("Valid user ID is required.");
+  }
+  return parseInt(userId);
+};
 
 const handleAddFaceScan = asyncHandler(async (req, res, _next) => {
-  const { faceScan } = req.body;
-  const userId = req.user.id;
+  const updatedUser = await faceScanService.addFaceScan(
+    parseInt(req.user.id),
+    req.body.faceScan
+  );
 
-  const user = await prisma.user.findUnique({
-    where: { id: parseInt(userId) },
-  });
-
-  if (!user) {
-    throw new NotFoundError("User not found.");
-  }
-
-  if (user.faceScan) {
-    throw new ConflictError(
-      "User face scan already exists. Contact an admin to reset your face scan before updating."
-    );
-  }
-
-  const updatedUser = await prisma.user.update({
-    where: { id: parseInt(userId) },
-    data: { faceScan },
-    select: {
-      id: true,
-      firstName: true,
-      lastName: true,
-      email: true,
-      profilePicture: true,
-      phone: true,
-      faceScan: true,
-      role: true,
-      createdAt: true,
-      updatedAt: true,
-    },
-  });
-
-  const { password: _userPassword, ...userWithoutPassword } = updatedUser;
-
-  res.status(200).json({
+  res.status(HTTP_STATUS_CODES.OK).json({
     message: "Face scan added successfully.",
     data: {
       faceScan: updatedUser.faceScan,
-      user: userWithoutPassword,
+      user: updatedUser,
     },
   });
 });
@@ -61,72 +38,22 @@ export const addFaceScan = [
 ];
 
 export const getUserFaceScan = asyncHandler(async (req, res, _next) => {
-  const { userId } = req.params;
-  const currentUserId = req.user.id;
-  const currentUserRole = req.user.role;
+  const targetUserId = parseUserId(req.params.userId);
 
-  if (!userId || isNaN(parseInt(userId))) {
-    throw new ValidationError("Valid user ID is required.");
-  }
+  const data = await faceScanService.getFaceScanStatus(req.user, targetUserId);
 
-  const targetUserId = parseInt(userId);
-
-  if (
-    targetUserId !== parseInt(currentUserId?.toString() || "0") &&
-    currentUserRole !== "ADMIN"
-  ) {
-    throw new UnauthorizedError(
-      "Only admins can access other users' face scans."
-    );
-  }
-
-  const user = await prisma.user.findUnique({
-    where: { id: targetUserId },
-  });
-
-  if (!user) {
-    throw new NotFoundError("User not found.");
-  }
-
-  if (!user.faceScan) {
-    throw new NotFoundError("No face scan data found for the user.");
-  }
-
-  res.status(200).json({
+  res.status(HTTP_STATUS_CODES.OK).json({
     message: "Face scan retrieved successfully.",
-    data: {
-      faceScan: user.faceScan,
-    },
+    data,
   });
 });
 
 export const deleteUserFaceScan = asyncHandler(async (req, res, _next) => {
-  const { userId } = req.params;
+  const targetUserId = parseUserId(req.params.userId);
 
-  if (!userId || isNaN(parseInt(userId))) {
-    throw new ValidationError("Valid user ID is required.");
-  }
+  await faceScanService.deleteFaceScan(targetUserId);
 
-  const user = await prisma.user.findUnique({
-    where: { id: parseInt(userId) },
-  });
-
-  if (!user) {
-    throw new NotFoundError("User not found.");
-  }
-
-  if (!user.faceScan) {
-    throw new NotFoundError(
-      `No face scan data found for user with ID ${userId}.`
-    );
-  }
-
-  await prisma.user.update({
-    where: { id: parseInt(userId) },
-    data: { faceScan: null },
-  });
-
-  res.status(200).json({
+  res.status(HTTP_STATUS_CODES.OK).json({
     message: "Face scan deleted successfully.",
   });
 });

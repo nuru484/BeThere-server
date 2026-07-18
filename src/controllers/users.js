@@ -1,73 +1,45 @@
-import { prisma } from "../config/prisma-client.js";
+// src/controllers/users.js
+//
+// Thin HTTP adapters over the user services: parse/validate input, call a
+// service, shape the { message, data, meta? } envelope.
 import {
   asyncHandler,
   ValidationError,
   UnauthorizedError,
-  NotFoundError,
-  ConflictError,
-  ForbiddenError,
-  BadRequestError,
 } from "../middleware/error-handler.js";
-import { HTTP_STATUS_CODES, BCRYPT_SALT_ROUNDS } from "../config/constants.js";
+import { HTTP_STATUS_CODES } from "../config/constants.js";
 import { validationMiddleware } from "../validation/validation-error-handler.js";
 import {
   addUserValidation,
   changePasswordValidation,
   updateUserProfileValidation,
 } from "../validation/users-validation.js";
-import bcrypt from "bcrypt";
-import { extractPublicIdFromUrl } from "../utils/extractPublicIdFromUrl.js";
-import cloudinary from "cloudinary";
+import { parsePagination, paginationMeta } from "../utils/pagination.js";
+import * as userService from "../services/user.service.js";
+import * as userQueryService from "../services/user-query.service.js";
 
-export const handleAddUser = asyncHandler(async (req, res, _next) => {
+const parseUserId = (userId, message = "Valid user ID is required.") => {
+  if (!userId || isNaN(parseInt(userId))) {
+    throw new ValidationError(message);
+  }
+  return parseInt(userId);
+};
+
+const handleAddUser = asyncHandler(async (req, res, _next) => {
   const { firstName, lastName, email, password, phone, role } = req.body;
 
-  const existingUserByEmail = await prisma.user.findUnique({
-    where: { email },
+  const data = await userService.createUser({
+    firstName,
+    lastName,
+    email,
+    password,
+    phone,
+    role,
   });
 
-  if (existingUserByEmail) {
-    throw new ConflictError("A user with this email already exists.");
-  }
-
-  if (phone) {
-    const existingUserByPhone = await prisma.user.findUnique({
-      where: { phone },
-    });
-
-    if (existingUserByPhone) {
-      throw new ConflictError("A user with this phone number already exists.");
-    }
-  }
-
-  const hashedPassword = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
-
-  const newUser = await prisma.user.create({
-    data: {
-      firstName,
-      lastName,
-      email,
-      password: hashedPassword,
-      phone: phone || null,
-      role: role || "USER",
-    },
-    select: {
-      id: true,
-      firstName: true,
-      lastName: true,
-      email: true,
-      profilePicture: true,
-      phone: true,
-      faceScan: true,
-      role: true,
-      createdAt: true,
-      updatedAt: true,
-    },
-  });
-
-  res.status(HTTP_STATUS_CODES.CREATED || 201).json({
+  res.status(HTTP_STATUS_CODES.CREATED).json({
     message: "User created successfully.",
-    data: newUser,
+    data,
   });
 });
 
@@ -76,74 +48,18 @@ export const addUser = [
   handleAddUser,
 ];
 
-export const handleUpdateUserProfile = asyncHandler(async (req, res, _next) => {
-  const { userId } = req.params;
-  const currentUserId = req.user?.id;
-  const currentUserRole = req.user?.role;
-  const userDetails = req.body;
+const handleUpdateUserProfile = asyncHandler(async (req, res, _next) => {
+  const targetUserId = parseUserId(req.params.userId);
 
-  if (!userId || isNaN(parseInt(userId))) {
-    throw new ValidationError("Valid user ID is required.");
-  }
-
-  const targetUserId = parseInt(userId);
-
-  if (
-    targetUserId !== parseInt(currentUserId?.toString() || "0") &&
-    currentUserRole !== "ADMIN"
-  ) {
-    throw new UnauthorizedError(
-      "Only admins can update other users' profiles."
-    );
-  }
-
-  const existingUser = await prisma.user.findUnique({
-    where: { id: targetUserId },
-    select: { profilePicture: true, email: true, phone: true },
-  });
-
-  if (!existingUser) {
-    throw new NotFoundError("User not found.");
-  }
-
-  if (userDetails.email && userDetails.email !== existingUser.email) {
-    const existingUserByEmail = await prisma.user.findUnique({
-      where: { email: userDetails.email },
-    });
-
-    if (existingUserByEmail && existingUserByEmail.id !== targetUserId) {
-      throw new ConflictError("A user with this email already exists.");
-    }
-  }
-
-  if (userDetails.phone && userDetails.phone !== existingUser.phone) {
-    const existingUserByPhone = await prisma.user.findUnique({
-      where: { phone: userDetails.phone },
-    });
-
-    if (existingUserByPhone && existingUserByPhone.id !== targetUserId) {
-      throw new ConflictError("A user with this phone number already exists.");
-    }
-  }
-
-  const updateData = {};
-  if (userDetails.firstName !== undefined)
-    updateData.firstName = userDetails.firstName;
-  if (userDetails.lastName !== undefined)
-    updateData.lastName = userDetails.lastName;
-  if (userDetails.email !== undefined) updateData.email = userDetails.email;
-  if (userDetails.phone !== undefined) updateData.phone = userDetails.phone;
-
-  const updatedUser = await prisma.user.update({
-    where: { id: targetUserId },
-    data: updateData,
-  });
-
-  const { _password, ...userWithoutPassword } = updatedUser;
+  const data = await userService.updateUserProfile(
+    req.user,
+    targetUserId,
+    req.body
+  );
 
   res.status(HTTP_STATUS_CODES.OK).json({
     message: "Profile updated successfully.",
-    data: userWithoutPassword,
+    data,
   });
 });
 
@@ -153,235 +69,66 @@ export const updateUserProfile = [
 ];
 
 export const updateUserRole = asyncHandler(async (req, res, _next) => {
-  const { userId } = req.params;
-  const { role } = req.body;
+  const targetUserId = parseUserId(req.params.userId);
 
-  if (!userId || isNaN(parseInt(userId))) {
-    throw new ValidationError("Valid user ID is required.");
-  }
+  const data = await userService.updateUserRole(
+    req.user,
+    targetUserId,
+    req.body.role
+  );
 
-  if (!["ADMIN", "USER"].includes(role)) {
-    throw new ValidationError("Invalid role. Must be ADMIN or USER.");
-  }
-
-  if (req.user.id === parseInt(userId)) {
-    throw new ForbiddenError("You cannot update your own role.");
-  }
-
-  const user = await prisma.user.findUnique({
-    where: { id: parseInt(userId) },
-  });
-
-  if (!user) {
-    throw new NotFoundError("User not found.");
-  }
-
-  if (user.role === role) {
-    throw new BadRequestError(`User already has the role: ${role}`);
-  }
-
-  const updatedUser = await prisma.user.update({
-    where: { id: parseInt(userId) },
-    data: {
-      role,
-    },
-    select: {
-      id: true,
-      firstName: true,
-      lastName: true,
-      email: true,
-      profilePicture: true,
-      phone: true,
-      faceScan: true,
-      role: true,
-      createdAt: true,
-      updatedAt: true,
-    },
-  });
-
-  return res.status(200).json({
+  res.status(HTTP_STATUS_CODES.OK).json({
     message: "User role updated successfully.",
-    data: updatedUser,
+    data,
   });
 });
 
-// Get User By ID
 export const getUserById = asyncHandler(async (req, res, _next) => {
-  const { userId } = req.params;
-  const currentUserId = req.user.id;
-  const currentUserRole = req.user.role;
+  const targetUserId = parseUserId(
+    req.params.userId,
+    "Valid user ID is required"
+  );
 
-  if (!userId || isNaN(parseInt(userId))) {
-    throw new ValidationError("Valid user ID is required");
-  }
+  const data = await userQueryService.getUserById(req.user, targetUserId);
 
-  const targetUserId = parseInt(userId);
-
-  if (
-    targetUserId !== parseInt(currentUserId?.toString() || "0") &&
-    currentUserRole !== "ADMIN"
-  ) {
-    throw new UnauthorizedError(
-      "Only admins can access other users' profiles."
-    );
-  }
-
-  const user = await prisma.user.findUnique({
-    where: { id: parseInt(userId) },
-    select: {
-      id: true,
-      firstName: true,
-      lastName: true,
-      email: true,
-      profilePicture: true,
-      phone: true,
-      faceScan: true,
-      role: true,
-      createdAt: true,
-      updatedAt: true,
-    },
-  });
-
-  if (!user) {
-    throw new NotFoundError("User not found.");
-  }
-
-  return res.status(HTTP_STATUS_CODES.OK || 200).json({
+  res.status(HTTP_STATUS_CODES.OK).json({
     message: "User fetched successfully.",
-    data: user,
+    data,
   });
 });
 
 export const getAllUsers = asyncHandler(async (req, res, _next) => {
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 10;
-  const skip = (page - 1) * limit;
+  const { page, limit, skip } = parsePagination(req.query);
 
-  const role = req.query.role;
-  const search = req.query.search;
-
-  const whereClause = {};
-
-  if (role) {
-    whereClause.role = role;
-  }
-
-  if (search) {
-    whereClause.OR = [
-      { firstName: { contains: search, mode: "insensitive" } },
-      { lastName: { contains: search, mode: "insensitive" } },
-      { email: { contains: search, mode: "insensitive" } },
-      { phoneNumber: { contains: search, mode: "insensitive" } },
-    ];
-  }
-
-  const [users, total] = await Promise.all([
-    prisma.user.findMany({
-      where: whereClause,
-      skip,
-      take: limit,
-      orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        firstName: true,
-        lastName: true,
-        email: true,
-        profilePicture: true,
-        phone: true,
-        faceScan: true,
-        role: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    }),
-    prisma.user.count({ where: whereClause }),
-  ]);
+  const { users, total } = await userQueryService.listUsers({
+    skip,
+    limit,
+    role: req.query.role,
+    search: req.query.search,
+  });
 
   if (users.length === 0) {
-    return res.status(200).json({
+    return res.status(HTTP_STATUS_CODES.OK).json({
       message: "There are no users at the moment.",
       data: [],
-      meta: {
-        total: 0,
-        page,
-        limit,
-        totalPages: 0,
-      },
+      meta: paginationMeta(0, page, limit),
     });
   }
 
-  return res.status(200).json({
+  return res.status(HTTP_STATUS_CODES.OK).json({
     message: "Users successfully fetched.",
     data: users,
-    meta: {
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    },
+    meta: paginationMeta(total, page, limit),
   });
 });
 
 export const deleteUser = asyncHandler(async (req, res, _next) => {
-  const { userId } = req.params;
+  const targetUserId = parseUserId(req.params.userId);
 
-  if (!userId || isNaN(parseInt(userId))) {
-    throw new ValidationError("Valid user ID is required.");
-  }
+  await userService.softDeleteUser(req.user, targetUserId);
 
-  const user = await prisma.user.findUnique({
-    where: { id: parseInt(userId) },
-  });
-
-  if (!user) {
-    throw new NotFoundError("User not found.");
-  }
-
-  const targetUserId = parseInt(userId);
-
-  if (targetUserId === parseInt(req.user.id?.toString() || "0")) {
-    if (user.role === "ADMIN") {
-      throw new ForbiddenError("Admins cannot delete themselves");
-    }
-  }
-
-  await prisma.user.delete({
-    where: { id: parseInt(userId) },
-  });
-
-  return res.status(200).json({
+  res.status(HTTP_STATUS_CODES.OK).json({
     message: "User deleted successfully.",
-  });
-});
-
-// Delete All Users
-export const deleteAllUsers = asyncHandler(async (req, res, _next) => {
-  const currentUserId = req.user.id;
-
-  const userCount = await prisma.user.count();
-
-  if (userCount === 0) {
-    return res.status(HTTP_STATUS_CODES.OK || 200).json({
-      message: "No users to delete.",
-      data: {
-        deletedCount: 0,
-      },
-    });
-  }
-
-  const result = await prisma.user.deleteMany({
-    where: {
-      id: {
-        not: parseInt(currentUserId?.toString() || "0"),
-      },
-    },
-  });
-
-  return res.status(HTTP_STATUS_CODES.OK || 200).json({
-    message: "All users deleted successfully (except your own account).",
-    data: {
-      deletedCount: result.count,
-    },
   });
 });
 
@@ -389,38 +136,13 @@ const handleChangePassword = asyncHandler(async (req, res, _next) => {
   const userId = req.user?.id;
   const { currentPassword, newPassword } = req.body;
 
+  // Typed errors carry their own status; a plain `throw new Error` would be
+  // formatted as a 500 by the central handler regardless of res.status().
   if (!userId) {
-    res.status(HTTP_STATUS_CODES.UNAUTHORIZED);
-    throw new Error("Unauthorized - user not logged in");
+    throw new UnauthorizedError("Unauthorized - user not logged in");
   }
 
-  if (currentPassword === newPassword) {
-    res.status(HTTP_STATUS_CODES.BAD_REQUEST);
-    throw new Error("New password cannot be the same as current password");
-  }
-
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { password: true },
-  });
-
-  if (!user) {
-    res.status(HTTP_STATUS_CODES.NOT_FOUND);
-    throw new Error("User not found");
-  }
-
-  const isMatch = await bcrypt.compare(currentPassword, user.password);
-  if (!isMatch) {
-    res.status(HTTP_STATUS_CODES.BAD_REQUEST);
-    throw new Error("Current password is incorrect");
-  }
-
-  const hashedNewPassword = await bcrypt.hash(newPassword, BCRYPT_SALT_ROUNDS);
-
-  await prisma.user.update({
-    where: { id: userId },
-    data: { password: hashedNewPassword },
-  });
+  await userService.changePassword(userId, currentPassword, newPassword);
 
   res.status(HTTP_STATUS_CODES.OK).json({
     message: "Password updated successfully",
@@ -433,83 +155,16 @@ export const changePassword = [
 ];
 
 export const updateProfilePicture = asyncHandler(async (req, res, _next) => {
-  const { userId } = req.params;
-  const currentUserId = req.user?.id;
-  const currentUserRole = req.user?.role;
+  const targetUserId = parseUserId(req.params.userId);
 
-  if (!userId || isNaN(parseInt(userId))) {
-    throw new ValidationError("Valid user ID is required.");
-  }
+  const data = await userService.updateProfilePicture(
+    req.user,
+    targetUserId,
+    req.file
+  );
 
-  const targetUserId = parseInt(userId);
-
-  if (
-    targetUserId !== parseInt(currentUserId?.toString() || "0") &&
-    currentUserRole !== "ADMIN"
-  ) {
-    throw new UnauthorizedError(
-      "Only admins can update other users' profile pictures."
-    );
-  }
-
-  if (!req.file) {
-    throw new BadRequestError("Profile picture file is required.");
-  }
-
-  const user = await prisma.user.findUnique({
-    where: { id: targetUserId },
-    select: { profilePicture: true },
-  });
-
-  if (!user) {
-    throw new NotFoundError("User not found.");
-  }
-
-  if (user.profilePicture) {
-    try {
-      const publicId = extractPublicIdFromUrl(user.profilePicture);
-      await cloudinary.v2.uploader.destroy(publicId);
-    } catch (error) {
-      console.error("Error deleting old profile picture:", error);
-    }
-  }
-
-  const uploadResult = await new Promise((resolve, reject) => {
-    const uploadStream = cloudinary.v2.uploader.upload_stream(
-      {
-        folder: "bethere",
-        quality: "auto",
-        fetch_format: "auto",
-      },
-      (error, result) => {
-        if (error) reject(error);
-        else resolve(result);
-      }
-    );
-    uploadStream.end(req.file.buffer);
-  });
-
-  const updatedUser = await prisma.user.update({
-    where: { id: targetUserId },
-    data: {
-      profilePicture: uploadResult.secure_url,
-    },
-    select: {
-      id: true,
-      firstName: true,
-      lastName: true,
-      email: true,
-      profilePicture: true,
-      phone: true,
-      faceScan: true,
-      role: true,
-      createdAt: true,
-      updatedAt: true,
-    },
-  });
-
-  res.status(HTTP_STATUS_CODES.OK || 200).json({
+  res.status(HTTP_STATUS_CODES.OK).json({
     message: "Profile picture updated successfully.",
-    data: updatedUser,
+    data,
   });
 });

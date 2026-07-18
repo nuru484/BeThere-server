@@ -1,7 +1,9 @@
-import { prisma } from "../config/prisma-client.js";
+// src/controllers/event.js
+//
+// Thin HTTP adapters over the event services: parse/validate input, call a
+// service, shape the { message, data, meta? } envelope.
 import {
   asyncHandler,
-  NotFoundError,
   ValidationError,
 } from "../middleware/error-handler.js";
 import { HTTP_STATUS_CODES } from "../config/constants.js";
@@ -10,89 +12,23 @@ import {
   createEventValidation,
   updateEventValidation,
 } from "../validation/event.js";
-import { sessionQueue } from "../jobs/session-queue.js";
-import { startOfDay, addDays } from "date-fns";
-import logger from "../utils/logger.js";
+import { parsePagination, paginationMeta } from "../utils/pagination.js";
+import * as eventService from "../services/event.service.js";
+import * as eventQueryService from "../services/event-query.service.js";
+
+const parseEventId = (eventId) => {
+  if (!eventId || isNaN(parseInt(eventId))) {
+    throw new ValidationError("Valid event ID is required.");
+  }
+  return parseInt(eventId);
+};
 
 const handleCreateEvent = asyncHandler(async (req, res, _next) => {
-  const {
-    location,
-    startDate,
-    endDate,
-    startTime,
-    endTime,
-    isRecurring,
-    durationDays,
-    ...eventDetails
-  } = req.body;
+  const data = await eventService.createEvent(req.body);
 
-  if (!isRecurring && !endDate) {
-    return res.status(400).json({
-      message: "endDate is required for non-recurring events",
-    });
-  }
-
-  let calculatedDuration = durationDays;
-
-  if (!isRecurring && startDate && endDate) {
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    const diffTime = Math.abs(end - start);
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
-    calculatedDuration = diffDays;
-  }
-
-  const eventData = {
-    ...eventDetails,
-    startDate: new Date(startDate),
-    endDate: endDate ? new Date(endDate) : null,
-    startTime,
-    endTime,
-    isRecurring: isRecurring || false,
-    durationDays: calculatedDuration || 1,
-    location: {
-      create: {
-        name: location.name,
-        latitude: parseFloat(location.latitude),
-        longitude: parseFloat(location.longitude),
-        city: location.city || null,
-        country: location.country || null,
-      },
-    },
-  };
-
-  const event = await prisma.event.create({
-    data: eventData,
-    include: {
-      location: true,
-    },
-  });
-
-  // ============ SCHEDULE FIRST SESSION ============
-  try {
-    const eventStartDate = startOfDay(new Date(startDate));
-    const now = new Date();
-    const delay = eventStartDate.getTime() - now.getTime();
-
-    if (delay > 0) {
-      // Event starts in the future - schedule for that date
-      await sessionQueue.add("createSession", { eventId: event.id }, { delay });
-      logger.info(
-        `📅 Scheduled first session for event ${
-          event.id
-        } on ${eventStartDate.toISOString()}`
-      );
-    } else {
-      await sessionQueue.add("createSession", { eventId: event.id });
-      logger.info(`📅 Queued immediate session creation for event ${event.id}`);
-    }
-  } catch (error) {
-    logger.info(error, `❌ Failed to schedule session for event ${event.id}:`);
-  }
-
-  res.status(HTTP_STATUS_CODES.CREATED || 201).json({
+  res.status(HTTP_STATUS_CODES.CREATED).json({
     message: "Event created successfully",
-    data: event,
+    data,
   });
 });
 
@@ -101,230 +37,14 @@ export const createEvent = [
   handleCreateEvent,
 ];
 
-export const handleUpdateEvent = asyncHandler(async (req, res, _next) => {
-  const { eventId } = req.params;
-  const {
-    location,
-    startDate,
-    endDate,
-    startTime,
-    endTime,
-    isRecurring,
-    durationDays,
-    ...eventUpdateData
-  } = req.body;
+const handleUpdateEvent = asyncHandler(async (req, res, _next) => {
+  const eventId = parseEventId(req.params.eventId);
 
-  if (!eventId || isNaN(parseInt(eventId))) {
-    throw new ValidationError("Valid event ID is required.");
-  }
+  const data = await eventService.updateEvent(eventId, req.body);
 
-  const existingEvent = await prisma.event.findUnique({
-    where: { id: parseInt(eventId) },
-    include: {
-      location: true,
-      sessions: {
-        orderBy: { startDate: "desc" },
-        take: 1,
-      },
-    },
-  });
-
-  if (!existingEvent) {
-    throw new NotFoundError(`Event with ID ${eventId} not found.`);
-  }
-
-  const currentDate = new Date();
-  const eventEndDate = existingEvent.endDate || existingEvent.startDate;
-  const hasEventPassed = new Date(eventEndDate) < currentDate;
-
-  const hasAttendance = await prisma.attendance.count({
-    where: {
-      session: {
-        eventId: parseInt(eventId),
-      },
-    },
-  });
-
-  if (startDate && hasAttendance > 0) {
-    const existingStartDate = new Date(existingEvent.startDate);
-    const newStartDateParsed = new Date(startDate);
-
-    if (existingStartDate.getTime() !== newStartDateParsed.getTime()) {
-      throw new ValidationError(
-        "Cannot update the start date of an event that already has attendance records."
-      );
-    }
-  }
-
-  if (!existingEvent.isRecurring && hasEventPassed) {
-    if (isRecurring === true) {
-      if (
-        startDate &&
-        new Date(startDate).getTime() !==
-          new Date(existingEvent.startDate).getTime()
-      ) {
-        throw new ValidationError(
-          "Cannot update the start date when converting a past non-recurring event to recurring. You can only change the recurring settings."
-        );
-      }
-    } else {
-      throw new ValidationError(
-        "Cannot update a non-recurring event that has already passed. Set isRecurring to true to convert it to a recurring event."
-      );
-    }
-  }
-
-  let calculatedDuration = durationDays;
-
-  const newStartDate = startDate
-    ? new Date(startDate)
-    : existingEvent.startDate;
-  const newEndDate = endDate ? new Date(endDate) : existingEvent.endDate;
-  const newIsRecurring =
-    isRecurring !== undefined ? isRecurring : existingEvent.isRecurring;
-
-  if (!newIsRecurring && !newEndDate) {
-    throw new ValidationError("endDate is required for non-recurring events");
-  }
-
-  if (!newIsRecurring && newStartDate && newEndDate) {
-    const start = new Date(newStartDate);
-    const end = new Date(newEndDate);
-    const diffTime = Math.abs(end - start);
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
-    calculatedDuration = diffDays;
-  }
-
-  const updateData = {
-    ...eventUpdateData,
-    ...(startDate && { startDate: new Date(startDate) }),
-    ...(endDate !== undefined && {
-      endDate: endDate ? new Date(endDate) : null,
-    }),
-    ...(startTime && { startTime }),
-    ...(endTime && { endTime }),
-    ...(isRecurring !== undefined && { isRecurring }),
-    ...(calculatedDuration && { durationDays: calculatedDuration }),
-  };
-
-  if (location) {
-    updateData.location = {
-      update: {
-        name: location.name,
-        latitude: parseFloat(location.latitude),
-        longitude: parseFloat(location.longitude),
-        city: location.city || null,
-        country: location.country || null,
-      },
-    };
-  }
-
-  const updatedEvent = await prisma.event.update({
-    where: { id: parseInt(eventId) },
-    data: updateData,
-    include: {
-      location: true,
-      sessions: {
-        orderBy: { startDate: "desc" },
-        take: 1,
-      },
-    },
-  });
-
-  // ============ HANDLE SESSION SCHEDULING AFTER UPDATE ============
-  try {
-    const startDateChanged =
-      startDate &&
-      new Date(startDate).getTime() !==
-        new Date(existingEvent.startDate).getTime();
-
-    const recurringStatusChanged =
-      isRecurring !== undefined && isRecurring !== existingEvent.isRecurring;
-
-    const hasNoSessions = existingEvent.sessions.length === 0;
-
-    if (hasNoSessions || startDateChanged || recurringStatusChanged) {
-      const eventStartDate = startOfDay(updatedEvent.startDate);
-      const now = new Date();
-
-      // Check if there's already a session for the new start date
-      const sessionExists = await prisma.session.findUnique({
-        where: {
-          eventId_startDate: {
-            eventId: updatedEvent.id,
-            startDate: eventStartDate,
-          },
-        },
-      });
-
-      if (!sessionExists) {
-        const delay = eventStartDate.getTime() - now.getTime();
-
-        if (delay > 0) {
-          await sessionQueue.add(
-            "createSession",
-            { eventId: updatedEvent.id },
-            { delay }
-          );
-          logger.info(
-            `📅 Rescheduled session for updated event ${updatedEvent.id}`
-          );
-        } else {
-          await sessionQueue.add("createSession", { eventId: updatedEvent.id });
-          logger.info(
-            `📅 Queued immediate session creation for updated event ${updatedEvent.id}`
-          );
-        }
-      } else {
-        logger.info(
-          `ℹ️ Session already exists for event ${
-            updatedEvent.id
-          } on ${eventStartDate.toISOString()}`
-        );
-      }
-    }
-
-    // If converted to recurring, schedule next occurrence
-    if (
-      recurringStatusChanged &&
-      updatedEvent.isRecurring &&
-      updatedEvent.sessions.length > 0
-    ) {
-      const lastSession = updatedEvent.sessions[0];
-      const nextSessionDate = addDays(
-        startOfDay(new Date(lastSession.startDate)),
-        updatedEvent.recurrenceInterval
-      );
-
-      const withinEventPeriod =
-        !updatedEvent.endDate ||
-        nextSessionDate <= new Date(updatedEvent.endDate);
-
-      if (withinEventPeriod) {
-        const delay = nextSessionDate.getTime() - new Date().getTime();
-
-        if (delay > 0) {
-          await sessionQueue.add(
-            "createSession",
-            { eventId: updatedEvent.id },
-            { delay }
-          );
-          logger.info(
-            `🔄 Scheduled next recurring session for event ${updatedEvent.id}`
-          );
-        }
-      }
-    }
-  } catch (error) {
-    logger.error(
-      error,
-      `❌ Failed to reschedule session for event ${updatedEvent.id}:`
-    );
-  }
-
-  res.status(HTTP_STATUS_CODES.OK || 200).json({
+  res.status(HTTP_STATUS_CODES.OK).json({
     message: "Event updated successfully",
-    data: updatedEvent,
+    data,
   });
 });
 
@@ -334,176 +54,48 @@ export const updateEvent = [
 ];
 
 export const deleteEvent = asyncHandler(async (req, res, _next) => {
-  const { eventId } = req.params;
+  const eventId = parseEventId(req.params.eventId);
 
-  if (!eventId || isNaN(parseInt(eventId))) {
-    throw new ValidationError("Valid event ID is required.");
-  }
+  await eventService.deleteEvent(eventId);
 
-  const event = await prisma.event.findUnique({
-    where: { id: parseInt(eventId) },
-  });
-
-  if (!event) {
-    throw new NotFoundError(`Event with ID ${eventId} not found.`);
-  }
-
-  const hasAttendance = await prisma.attendance.count({
-    where: {
-      session: {
-        eventId: parseInt(eventId),
-      },
-    },
-  });
-
-  if (hasAttendance > 0) {
-    throw new ValidationError(
-      "Cannot delete an event that has attendance records. Please archive the event instead to preserve historical data."
-    );
-  }
-
-  await prisma.event.delete({
-    where: { id: parseInt(eventId) },
-  });
-
-  res.status(200).json({ message: "Event deleted successfully." });
-});
-
-export const deleteAllEvents = asyncHandler(async (req, res, _next) => {
-  const eventsCount = await prisma.event.count();
-
-  if (eventsCount === 0) {
-    return res.status(HTTP_STATUS_CODES.OK || 200).json({
-      message: "No events to delete.",
-      data: {
-        deletedCount: 0,
-      },
-    });
-  }
-
-  const eventsWithAttendance = await prisma.event.findMany({
-    where: {
-      sessions: {
-        some: {
-          attendances: {
-            some: {},
-          },
-        },
-      },
-    },
-    select: {
-      id: true,
-      title: true,
-    },
-  });
-
-  if (eventsWithAttendance.length > 0) {
-    throw new ValidationError(
-      eventsWithAttendance.length === 1
-        ? `"${eventsWithAttendance[0].title}" has attendance. Archive instead of deleting.`
-        : `${eventsWithAttendance.length} events have attendance. Archive instead of deleting.`
-    );
-  }
-
-  const result = await prisma.event.deleteMany({});
-
-  res.status(HTTP_STATUS_CODES.OK || 200).json({
-    message: "All events deleted successfully.",
-    data: {
-      deletedCount: result.count,
-    },
+  res.status(HTTP_STATUS_CODES.OK).json({
+    message: "Event deleted successfully.",
   });
 });
 
 export const getEventById = asyncHandler(async (req, res, _next) => {
-  const { eventId } = req.params;
+  const eventId = parseEventId(req.params.eventId);
 
-  if (!eventId || isNaN(parseInt(eventId))) {
-    throw new ValidationError("Valid event ID is required.");
-  }
+  const data = await eventQueryService.getEventById(eventId);
 
-  const event = await prisma.event.findUnique({
-    where: { id: parseInt(eventId) },
-    include: {
-      location: true,
-    },
+  res.status(HTTP_STATUS_CODES.OK).json({
+    message: "Event successfully fetched.",
+    data,
   });
-
-  if (!event) {
-    throw new NotFoundError(`Event with ID ${eventId} not found.`);
-  }
-
-  res.status(200).json({ message: "Event successfully fetched.", data: event });
 });
 
 export const getAllEvents = asyncHandler(async (req, res, _next) => {
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 10;
-  const skip = (page - 1) * limit;
+  const { page, limit, skip } = parsePagination(req.query);
 
-  const search = req.query.search || "";
-  const type = req.query.type;
-  const location = req.query.location;
-
-  const whereClause = {};
-
-  if (search) {
-    whereClause.OR = [
-      { title: { contains: search, mode: "insensitive" } },
-      { description: { contains: search, mode: "insensitive" } },
-      { type: { contains: search, mode: "insensitive" } },
-      { location: { city: { contains: search, mode: "insensitive" } } },
-    ];
-  }
-
-  if (type) {
-    whereClause.type = type;
-  }
-
-  if (location) {
-    whereClause.location = {
-      OR: [
-        { name: { contains: location, mode: "insensitive" } },
-        { city: { contains: location, mode: "insensitive" } },
-        { country: { contains: location, mode: "insensitive" } },
-      ],
-    };
-  }
-
-  const [events, totalRecords] = await Promise.all([
-    prisma.event.findMany({
-      where: whereClause,
-      skip,
-      take: limit,
-      orderBy: { createdAt: "desc" },
-      include: {
-        location: true,
-      },
-    }),
-    prisma.event.count({ where: whereClause }),
-  ]);
+  const { events, total } = await eventQueryService.listEvents({
+    skip,
+    limit,
+    search: req.query.search || "",
+    type: req.query.type,
+    location: req.query.location,
+  });
 
   if (events.length === 0) {
-    return res.status(200).json({
+    return res.status(HTTP_STATUS_CODES.OK).json({
       message: "There are no events at the moment.",
       data: [],
-      pagination: {
-        totalRecords: 0,
-        page,
-        limit,
-        totalPages: 0,
-      },
+      meta: paginationMeta(0, page, limit),
     });
   }
 
-  res.status(200).json({
+  res.status(HTTP_STATUS_CODES.OK).json({
     message: "Events successfully fetched.",
     data: events,
-    pagination: {
-      totalRecords,
-      page,
-      limit,
-      totalPages: Math.ceil(totalRecords / limit),
-    },
+    meta: paginationMeta(total, page, limit),
   });
 });
