@@ -15,9 +15,15 @@ import { deleteImage, uploadImage } from "../utils/cloudinary.js";
 import { assertSelfAdmin } from "../utils/authorization.js";
 import { revokeAllSessions, toSafeUser } from "./auth.service.js";
 
-/** The public admin projection - the Admin twin of USER_SELECT. */
+/**
+ * The public admin projection - the Admin twin of USER_SELECT. `password` is
+ * selected only so toSafeUser can derive `hasPassword` consistently with the
+ * list/create paths (which pass the full row); toSafeUser strips the hash, so
+ * it never reaches a response.
+ */
 export const ADMIN_SELECT = {
   id: true,
+  password: true,
   firstName: true,
   lastName: true,
   email: true,

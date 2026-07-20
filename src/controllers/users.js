@@ -88,7 +88,6 @@ export const getAllUsers = asyncHandler(async (req, res, _next) => {
   const { users, total } = await userQueryService.listUsers({
     skip,
     limit,
-    role: req.query.role,
     search: req.query.search,
   });
 

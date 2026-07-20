@@ -31,15 +31,34 @@ export const ATTENDANCE_LIST_INCLUDE = {
   },
 };
 
-/** Validates and normalizes a status filter (PRESENT/LATE/ABSENT). */
+/**
+ * Validates and normalizes a status filter (PRESENT/LATE/ABSENT).
+ * Express parses `?status[]=X` (and `?status=a&status=b`) into an array, so a
+ * non-string value must be rejected as a bad filter rather than crashing on
+ * `.toUpperCase()`.
+ */
 export function parseStatusFilter(status) {
   const validStatuses = ["PRESENT", "LATE", "ABSENT"];
-  if (!validStatuses.includes(status.toUpperCase())) {
+  if (typeof status !== "string" || !validStatuses.includes(status.toUpperCase())) {
     throw new ValidationError(
       "Invalid status. Must be one of: PRESENT, LATE, ABSENT"
     );
   }
   return status.toUpperCase();
+}
+
+/**
+ * Normalizes a free-text search term. Same array hazard as the status filter:
+ * `?search[]=x` arrives as an array, which is not a searchable term.
+ * Returns undefined when there is nothing to search for.
+ */
+export function parseSearchFilter(search) {
+  if (search === undefined || search === null) return undefined;
+  if (typeof search !== "string") {
+    throw new ValidationError("Invalid search term.");
+  }
+  const trimmed = search.trim();
+  return trimmed === "" ? undefined : trimmed;
 }
 
 /** Check-in time range filter; the end date is inclusive (end of that day). */
@@ -165,19 +184,20 @@ export async function listUserAttendance(
   });
 
   // Search across event title, description, type, and location
-  if (search) {
+  const searchTerm = parseSearchFilter(search);
+  if (searchTerm) {
     whereClause.session = {
       event: {
         OR: [
-          { title: { contains: search, mode: "insensitive" } },
-          { description: { contains: search, mode: "insensitive" } },
-          { type: { contains: search, mode: "insensitive" } },
+          { title: { contains: searchTerm, mode: "insensitive" } },
+          { description: { contains: searchTerm, mode: "insensitive" } },
+          { type: { contains: searchTerm, mode: "insensitive" } },
           {
             location: {
               OR: [
-                { name: { contains: search, mode: "insensitive" } },
-                { city: { contains: search, mode: "insensitive" } },
-                { country: { contains: search, mode: "insensitive" } },
+                { name: { contains: searchTerm, mode: "insensitive" } },
+                { city: { contains: searchTerm, mode: "insensitive" } },
+                { country: { contains: searchTerm, mode: "insensitive" } },
               ],
             },
           },
@@ -223,19 +243,20 @@ export async function listEventAttendance(
 
   // One search box covers attendant details AND, when the term is a plain
   // number, the session id - so the separate session filter is optional.
-  if (search) {
+  const searchTerm = parseSearchFilter(search);
+  if (searchTerm) {
     const userMatch = {
       user: {
         OR: [
-          { firstName: { contains: search, mode: "insensitive" } },
-          { lastName: { contains: search, mode: "insensitive" } },
-          { email: { contains: search, mode: "insensitive" } },
+          { firstName: { contains: searchTerm, mode: "insensitive" } },
+          { lastName: { contains: searchTerm, mode: "insensitive" } },
+          { email: { contains: searchTerm, mode: "insensitive" } },
         ],
       },
     };
 
-    const numericSearch = /^\d+$/.test(search.trim())
-      ? parseInt(search.trim(), 10)
+    const numericSearch = /^\d+$/.test(searchTerm)
+      ? parseInt(searchTerm, 10)
       : null;
 
     whereClause.AND = [

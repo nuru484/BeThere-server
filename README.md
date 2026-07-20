@@ -22,7 +22,7 @@ Each event has a server-side secret. A screen at the venue shows a QR that rotat
 Check-in and check-out are a two-step handshake. A fail-fast preflight (valid venue code + enrollment + session window) issues a **randomized action sequence** (turn, blink, smile) and a single-use challenge token. The client uploads raw frames performing those actions, and the server verifies, from the pixels: the actions happened, the face matches the enrolled template, it is not a replayed descriptor, and it is one continuous person. Only then is attendance recorded (**PRESENT / LATE**). Failed attempts are retained as flagged evidence and an anomaly for review.
 
 **4. Automated recurring sessions.**
-Events can be one-off or **recurring** (every X days, with a duration and a daily open/close window). A **BullMQ + Redis** pipeline (`session-scheduler.js` -> `session-worker.js`, orchestrated by `worker.js`) automatically generates `Session` records for upcoming occurrences, deduplicates them, and runs as a **separate worker process**. **date-fns** handles all date math.
+Events can be one-off or **recurring** (every X days, with a duration and a daily open/close window). A **BullMQ + Redis** pipeline (`session-scheduler.js` -> `session-worker.js`, wired up by `src/jobs/lifecycle.js`) automatically generates `Session` records for upcoming occurrences and deduplicates them. It runs in-process on the web server by default, or in a **separate worker process** (`worker.js`) when `WEB_DISABLE_WORKERS=true` is set on the web process. **date-fns** handles all date math.
 
 **5. Roles, dashboards, and audit.**
 Two roles (`ADMIN`, `USER`). **Users** check in/out and view their own history. **Admins** create/update/delete events, open the venue-code display, manage users, reset a user's face scan, review anomaly flags and evidence, and pull organization-wide analytics. Every check-in and biometric action is written to an append-only **audit log**.
@@ -143,7 +143,7 @@ Session Scheduler → Session Worker (background)
 * **Event**: base entity defining event metadata, recurrence, and location.
 * **Session**: generated automatically for recurring or future events.
 * **Attendance**: links users to sessions (with timestamps and status).
-* **Location**: stores coordinates and contextual data for each event.
+* **Location**: stores the venue's name, city, and country for each event (no coordinates: presence is proven by the rotating venue code, not GPS).
 
 All schema relations and constraints are defined using **Prisma**.
 
@@ -157,10 +157,12 @@ Automates the creation of event sessions using **BullMQ** and **Redis**.
 
 ### 🧩 Components
 
-* `sessionQueue.js` → defines the job queue.
-* `session-scheduler.js` → finds upcoming events and schedules session creation jobs.
-* `session-worker.js` → executes session creation logic, ensuring no duplicates and respecting recurrence intervals.
-* `worker.js` → initializes all workers, handles daily recurring job scheduling, and manages graceful shutdown.
+* `src/jobs/session-queue.js` → defines the job queue.
+* `src/jobs/session-scheduler.js` → finds upcoming events and schedules session creation jobs.
+* `src/jobs/session-worker.js` → executes session creation logic, ensuring no duplicates and respecting recurrence intervals.
+* `src/jobs/token-cleanup.js` → queue for the daily retention sweep.
+* `src/jobs/lifecycle.js` → starts/stops every worker and registers the daily repeatable jobs (session generation at midnight, retention sweep at 03:00). Shared by both entrypoints.
+* `worker.js` → the dedicated worker process entrypoint: calls `startWorkers()` and manages graceful shutdown. The web process (`server.js`) runs the same workers in-process unless `WEB_DISABLE_WORKERS=true`.
 
 ---
 
@@ -168,7 +170,7 @@ Automates the creation of event sessions using **BullMQ** and **Redis**.
 
 ### Prerequisites
 
-* **Node.js** ≥ 18
+* **Node.js** ≥ 20.6 (the `dev`, `migrate`, `seed:dev`, `worker:dev`, and `studio` scripts use `node --env-file`, which landed in 20.6). Node **22** is what the Dockerfile builds and runs on and is the recommended version.
 * **PostgreSQL** ≥ 14
 * **Redis** (for BullMQ queue management)
 
@@ -187,13 +189,34 @@ npm install
 
 Server-side face verification needs two things in place:
 
-```bash
-# 1. The face-api model weights must live under FACE_MODELS_PATH (default ./models).
-#    They ship in this repo's ./models directory. If missing, copy them from the
-#    client's public/models (tiny_face_detector, face_landmark_68, face_recognition,
-#    face_expression).
+**1. Model weights.** They must live under `FACE_MODELS_PATH` (default `./models`) and
+**already ship in this repo's `./models` directory**, so a fresh clone needs no extra
+step. `src/lib/face-engine.js` loads four nets, which means these nine files:
 
-# 2. Generate the biometric encryption key (required) and put it in .env:
+```
+models/
+├── tiny_face_detector_model-weights_manifest.json
+├── tiny_face_detector_model-shard1
+├── face_landmark_68_model-weights_manifest.json
+├── face_landmark_68_model-shard1
+├── face_recognition_model-weights_manifest.json
+├── face_recognition_model-shard1
+├── face_recognition_model-shard2
+├── face_expression_model-weights_manifest.json
+└── face_expression_model-shard1
+```
+
+If you ever need to restore them, take them from the `model/` directory of the
+[@vladmandic/face-api](https://github.com/vladmandic/face-api) repository (the same
+weights face-api.js publishes). Note that the client's `public/models` is **not** a
+complete source: the browser only enrolls descriptors, so it ships just
+`tiny_face_detector`, `face_landmark_68`, and `face_recognition`. The
+`face_expression` net is server-only (the "smile" liveness action needs it), and a
+missing set makes model loading, and therefore every check-in, fail.
+
+**2. The biometric encryption key.** Generate it and put it in `.env`:
+
+```bash
 openssl rand -hex 32   # -> FACE_TEMPLATE_ENC_KEY
 ```
 
@@ -210,10 +233,14 @@ npm run migrate
 
 > ⚙️ **Seed the Database**
 >
-> Creates default admin and base configuration.
+> Creates the first admin and base configuration. The seed is **opt-in**: without
+> `ADMIN_SEED_ENABLED=true` in the environment it logs "Seed skipped" and does
+> nothing, so a deploy can never silently plant credentials in production.
+> `npm run seed` expects the variables to already be in the environment; use
+> `npm run seed:dev` to load them from `.env`.
 >
 > ```bash
-> npm run seed
+> npm run seed:dev
 > ```
 
 ### Running the Server
@@ -222,14 +249,18 @@ npm run migrate
 # Development mode
 npm run dev
 
-# Production build
+# Production (reads config from the real environment, not .env)
 npm start
 ```
 
 ### Running Background Worker
 
+The web process already runs the workers in-process, so this is only needed when
+you want them isolated. If you run it, set `WEB_DISABLE_WORKERS=true` on the web
+process so jobs are not processed twice.
+
 ```bash
-# Run worker (session creation + scheduler)
+# Run worker (session creation + scheduler + retention sweep)
 npm run worker:dev
 ```
 
@@ -239,29 +270,59 @@ npm run worker:dev
 
 ## 🔐 Environment Variables
 
-Create a `.env` file in the root directory with:
+Copy [`.env.example`](./.env.example) to `.env` and fill it in; it is the
+authoritative list and tags every variable `(required)` or `(optional)`.
+
+Every **required** variable is read through a fail-fast reader in
+`src/config/env.js`, so a missing one throws at boot with the variable named
+rather than failing mid-request. The full required set is:
 
 ```bash
-DATABASE_URL= 'your db url, example "postgresql://postgresUser:password@localhost:5432/dbName?schema=public"'
-PORT="your port, example 8080"
-NODE_ENV="development"
-CORS_ACCESS="your cors access, example 'http://localhost:3000'"
-ACCESS_TOKEN_SECRET="your access_token_secret"
-REFRESH_TOKEN_SECRET="your_refresh_token_secret"
+# --- Core ---
+DATABASE_URL="postgresql://user:pass@localhost:5432/bethere?schema=public"
 
-ADMIN_EMAIL="your admin email, example"
-ADMIN_PASSWORD="your admin password, example 1234"
-ADMIN_FIRSTNAME="your admin first name, example Nurudeen"
-ADMIN_LASTNAME="your admin last name, example Abdul-Majeed"
-ADMIN_PHONE="your admin phone number, example 233546488115"
+# --- Auth / cookies ---
+ACCESS_TOKEN_SECRET="long random string"
+REFRESH_TOKEN_SECRET="long random string, different from the access secret"
+FRONTEND_URL="https://your-frontend.example"
 
+# --- First admin (used by the seed) ---
+ADMIN_EMAIL=
+ADMIN_PASSWORD=
+ADMIN_FIRSTNAME=
+ADMIN_LASTNAME=
 
-CLOUDINARY_CLOUD_NAME="your cloudinary cloud name"   
-CLOUDINARY_API_KEY="your cloudinary api key"    
-CLOUDINARY_API_SECRET="your cloudinary api secret"    
+# --- Face templates ---
+FACE_TEMPLATE_ENC_KEY=   # 32-byte AES-256-GCM key: openssl rand -hex 32
 
-REDIS_URL="your redis url"
+# --- Media (Cloudinary) ---
+CLOUDINARY_CLOUD_NAME=
+CLOUDINARY_API_KEY=
+CLOUDINARY_API_SECRET=
+
+# --- Redis (sessions, rate limits, job queue) ---
+REDIS_URL="redis://localhost:6379"
+
+# --- Email (SMTP) ---
+SMTP_HOST="smtp.gmail.com"
+GMAIL_USER=          # the account outgoing mail is sent from
+GMAIL_PASSWORD=      # app password
 ```
+
+Everything else is **optional** and falls back to a default:
+`NODE_ENV` (`development`), `PORT` (`8080`), `CORS_ACCESS` (extra allowed
+origins, comma-separated), `COOKIE_DOMAIN` (blank = host-only cookies),
+`ADMIN_PHONE`, `ADMIN_SEED_ENABLED` (`false`), `DEMO_LOGIN_ENABLED` (`false`),
+`DEMO_ADMIN_EMAIL`, `DEMO_ATTENDANT_EMAIL`, `LIVENESS_ENABLED` (`true`),
+`FACE_MODELS_PATH` (`./models`), `FACE_MATCH_THRESHOLD` (`0.6`), `SMTP_PORT`
+(`587`), `SMTP_SECURE` (`false`), `SMTP_MAIL` (defaults to `GMAIL_USER`),
+`FROG_API_KEY` / `FROG_USERNAME` / `FROG_SENDER_ID` (all blank = log-only SMS),
+`EVENT_TIMEZONE` (`Africa/Accra`), `SENTRY_DSN` (blank disables error
+tracking), `WEB_DISABLE_WORKERS` (`false`), and `PROCESS_TYPE` (`web`, read by
+the Docker entrypoint).
+
+> `LIVENESS_ENABLED=false` is refused when `NODE_ENV=production`: it would make
+> every check-in pass without looking at a frame.
 
 ---
 
@@ -273,16 +334,20 @@ bethere-server/
 ├── prisma/                  # Prisma schema, migrations & seeds
 │
 ├── src/
-│   ├── config/              # Env, Prisma, Redis, Multer, Cloudinary configs
-│   ├── controllers/         # Business logic (attendance, event, user, auth)
-│   ├── jobs/                # BullMQ queues, schedulers, workers
-│   ├── middleware/          # Auth, error handling, role validation
+│   ├── config/              # Env, constants, Prisma, Redis, Multer configs
+│   ├── controllers/         # Request/response handling per resource
+│   ├── services/            # Business logic (attendance, events, auth, face scan)
+│   ├── jobs/                # BullMQ queues, schedulers, workers, lifecycle
+│   ├── lib/                 # Face engine, Redis client, Sentry
+│   ├── middleware/          # Auth, error handling, role validation, rate limits
 │   ├── routes/              # API routes
-│   ├── utils/               # Logger, token verification, cloud helpers
+│   ├── utils/               # Logger, token verification, crypto, cloud helpers
 │   └── validation/          # Input validations
 │
-├── worker.js                # Initializes job schedulers/workers
-├── server.js                # Express app entry point
+├── models/                  # face-api model weights (FACE_MODELS_PATH)
+├── app.js                   # Express app assembly
+├── server.js                # Web process entry point
+├── worker.js                # Dedicated background worker entry point
 └── package.json
 ```
 

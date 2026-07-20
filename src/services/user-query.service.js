@@ -1,7 +1,8 @@
 // src/services/user-query.service.js
 //
-// User reads: single profile fetch (owner-or-admin) and the admin list
-// with role/search filters. Both answer in the safe user shape.
+// User reads: single profile fetch (owner-or-admin) and the admin list with a
+// search filter. Both answer in the safe user shape. There is no role filter:
+// every row in this table is an attendant (staff live in the Admin table).
 import { prisma } from "../config/prisma-client.js";
 import { NotFoundError } from "../middleware/error-handler.js";
 import { assertSelfOrAdmin } from "../utils/authorization.js";

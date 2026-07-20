@@ -24,8 +24,14 @@ initSentry();
 
 const app = express();
 
+// Trimmed: a comma-separated list is usually written with spaces, and an
+// untrimmed " https://b.com" would never match the Origin header.
 const allowedOrigins = new Set(
-  ENV.CORS_ACCESS ? ENV.CORS_ACCESS.split(",") : []
+  ENV.CORS_ACCESS
+    ? ENV.CORS_ACCESS.split(",")
+        .map((origin) => origin.trim())
+        .filter(Boolean)
+    : []
 );
 
 const corsOptions = {

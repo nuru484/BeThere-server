@@ -26,8 +26,21 @@ async function purgeDormantTemplates() {
   );
   const { count } = await prisma.user.updateMany({
     where: {
-      faceLastUsedAt: { lt: cutoff },
-      OR: [{ faceScanEnc: { not: null } }, { faceScan: { not: null } }],
+      AND: [
+        { OR: [{ faceScanEnc: { not: null } }, { faceScan: { not: null } }] },
+        {
+          OR: [
+            { faceLastUsedAt: { lt: cutoff } },
+            // NULL never satisfies `lt` in SQL, so a template that has never
+            // verified a check-in - notably the legacy plaintext enrollments
+            // that predate faceLastUsedAt - would otherwise be skipped
+            // forever. Fall back to updatedAt: it is bumped by any write to
+            // the row, so it is never earlier than the enrollment itself and
+            // cannot purge a freshly enrolled template.
+            { faceLastUsedAt: null, updatedAt: { lt: cutoff } },
+          ],
+        },
+      ],
     },
     data: {
       faceScanEnc: null,
