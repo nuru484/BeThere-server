@@ -238,7 +238,9 @@ model Attendance {
 model LivenessChallenge {
   id         Int       @id @default(autoincrement())
   userId     Int
-  eventId    Int
+  // Null for ENROLLMENT challenges, which prove liveness before a template
+  // exists and therefore belong to no event.
+  eventId    Int?
   nonce      String    @unique
   // Ordered action codes, e.g. ["TURN_LEFT", "BLINK", "SMILE"].
   actions    Json

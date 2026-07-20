@@ -18,14 +18,54 @@ import { isFaceDescriptor } from "../utils/face-match.js";
 import { BIOMETRIC_CONSENT_VERSION } from "../config/constants.js";
 import { recordAudit } from "./audit.service.js";
 import { KIND_USER, toSafeUser } from "./auth.service.js";
+import {
+  issueChallenge,
+  consumeChallenge,
+} from "./liveness-challenge.service.js";
+import { getEnrollmentVerifier } from "./liveness/liveness-verifier.js";
 
 const hasEnrollment = (user) => Boolean(user.faceScanEnc || user.faceScan);
 
+/** Challenge mode tag: keeps an enrollment challenge from ever driving a
+ * check-in (and vice versa) even though both use the same token format. */
+const ENROLL_MODE = "enroll";
+
 /**
- * One-time enrollment. Requires consent and a valid 128-float descriptor;
- * stores the template encrypted. An existing scan must be admin-reset first.
+ * Step 1 of enrollment: a randomized liveness challenge, exactly like check-in.
+ * Refused when a template already exists, so the expensive capture is never
+ * started for a user who would be rejected at the end.
  */
-export async function addFaceScan(userId, faceScan, { consent, ip } = {}) {
+export async function prepareEnrollmentChallenge(userId) {
+  const user = await prisma.user.findFirst({ where: { id: userId } });
+
+  if (!user) {
+    throw new NotFoundError("User not found.");
+  }
+
+  if (hasEnrollment(user)) {
+    throw new ConflictError(
+      "User face scan already exists. Contact an admin to reset your face scan before updating."
+    );
+  }
+
+  return issueChallenge({ userId, eventId: null, mode: ENROLL_MODE });
+}
+
+/**
+ * Step 2: one-time enrollment FROM IMAGES. The server runs the face engine
+ * over the uploaded frames, proves the challenge actions were performed live,
+ * and derives the template itself.
+ *
+ * The descriptor used to arrive as a JSON array computed in the browser, so
+ * the server never saw a face at the moment identity was established and a
+ * template built from a photograph of somebody else was indistinguishable from
+ * a real enrollment. Everything downstream (matching, evidence, anomalies)
+ * trusts this template, so it has to be produced server-side.
+ */
+export async function enrollFaceScan(
+  userId,
+  { frameBuffers, consent, challengeToken, ip } = {}
+) {
   const user = await prisma.user.findFirst({ where: { id: userId } });
 
   if (!user) {
@@ -38,20 +78,50 @@ export async function addFaceScan(userId, faceScan, { consent, ip } = {}) {
     );
   }
 
-  if (!isFaceDescriptor(faceScan)) {
-    throw new BadRequestError("A valid face descriptor is required.");
-  }
-
   if (hasEnrollment(user)) {
     throw new ConflictError(
       "User face scan already exists. Contact an admin to reset your face scan before updating."
     );
   }
 
+  // Single-use: a replayed token cannot re-drive an enrollment.
+  const { actions } = await consumeChallenge({
+    token: challengeToken,
+    userId,
+    eventId: null,
+    mode: ENROLL_MODE,
+  });
+
+  const verdict = await getEnrollmentVerifier().enroll({
+    frameBuffers,
+    actions,
+    userId,
+  });
+
+  if (!verdict.passed || !isFaceDescriptor(verdict.descriptor)) {
+    await recordAudit({
+      actorKind: "USER",
+      actorId: userId,
+      action: "FACE_ENROLL_FAILED",
+      targetType: "User",
+      targetId: userId,
+      metadata: {
+        reasons: verdict.reasons,
+        failedActions: verdict.failedActions,
+      },
+      ip,
+    });
+
+    throw new BadRequestError(
+      "We could not verify a live face in that capture. Please follow the prompts in order and try again.",
+      { reasons: verdict.reasons, failedActions: verdict.failedActions }
+    );
+  }
+
   const updated = await prisma.user.update({
     where: { id: userId },
     data: {
-      faceScanEnc: encryptTemplate(faceScan),
+      faceScanEnc: encryptTemplate(verdict.descriptor),
       faceScan: null,
       biometricConsentAt: new Date(),
       biometricConsentVersion: BIOMETRIC_CONSENT_VERSION,

@@ -117,6 +117,76 @@ function proveActionsInOrder(frames, actions) {
   return failed;
 }
 
+/** Index of the frame closest to all the others - the most representative
+ * capture in the burst, and a real observed descriptor rather than an average
+ * of poses. */
+function medoidIndex(frames) {
+  let best = 0;
+  let bestTotal = Infinity;
+
+  for (let i = 0; i < frames.length; i++) {
+    let total = 0;
+    for (let j = 0; j < frames.length; j++) {
+      if (i === j) continue;
+      total += euclideanDistance(frames[i].descriptor, frames[j].descriptor);
+    }
+    if (total < bestTotal) {
+      bestTotal = total;
+      best = i;
+    }
+  }
+
+  return best;
+}
+
+/**
+ * The ENROLLMENT decision. There is no stored template to compare against yet,
+ * so instead of proving "this is the enrolled person" it proves the capture is
+ * a live, self-consistent person performing the challenge, and then DERIVES the
+ * template from the frames.
+ *
+ * This is what moves the trust boundary: the descriptor used to be computed in
+ * the browser and posted as JSON, so the server never saw a face at the moment
+ * identity was established and anyone could enroll a template built from a
+ * photograph of someone else.
+ *
+ * @returns { passed, reasons, failedActions, descriptor }
+ */
+export function evaluateEnrollment(frames, actions, matchThreshold) {
+  const reasons = [];
+
+  if (frames.length < LIVENESS.MIN_FRAMES) {
+    return {
+      passed: false,
+      reasons: ["insufficient_usable_frames"],
+      failedActions: actions,
+      descriptor: null,
+    };
+  }
+
+  const failedActions = proveActionsInOrder(frames, actions);
+  if (failedActions.length > 0) reasons.push("action_not_satisfied");
+
+  if (hasDuplicateFrames(frames)) reasons.push("duplicate_frames");
+
+  // One person throughout: the burst must cluster around its own medoid, so a
+  // mid-capture swap cannot blend two faces into a single enrolled template.
+  const centre = frames[medoidIndex(frames)].descriptor;
+  const clustered = frames.filter(
+    (f) => euclideanDistance(f.descriptor, centre) <= matchThreshold
+  ).length;
+  if (clustered / frames.length < 0.8) reasons.push("inconsistent_identity");
+
+  const passed = reasons.length === 0;
+
+  return {
+    passed,
+    reasons,
+    failedActions: [...new Set(failedActions)],
+    descriptor: passed ? centre : null,
+  };
+}
+
 /**
  * @param {Array<{descriptor:number[],yaw:number,ear:number,happy:number,score:number}>} frames
  * @param {number[]} enrolled - the enrolled 128-float descriptor
