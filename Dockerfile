@@ -23,9 +23,11 @@ COPY . .
 RUN chown -R node:node /app
 USER node
 
-# Liveness: the process must answer /health (no curl in slim - use node).
+# Liveness: the WEB process must answer /health (no curl in slim - use node).
+# The worker serves no HTTP, so its healthcheck is a no-op (process-level
+# restart handles a crashed worker); otherwise it would always read unhealthy.
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD node -e "fetch('http://localhost:'+(process.env.PORT||8080)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD sh -c 'if [ "${PROCESS_TYPE:-web}" = "worker" ]; then exit 0; else node -e "fetch(\"http://localhost:\"+(process.env.PORT||8080)+\"/health\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; fi'
 
 EXPOSE 8080
 ENTRYPOINT ["./docker-entrypoint.sh"]

@@ -1,29 +1,34 @@
 # <img src="public/assets/logo.png" alt="BeThere Logo" width="35" style="vertical-align: middle;"/> BeThere – Smart Attendance System Backend
 
-**BeThere** is the backend that powers a full-stack **smart attendance system** which verifies attendance using **facial recognition** combined with **GPS geolocation**. Instead of signing a sheet or tapping a card, a person looks into their device camera, the system matches their face against an enrolled scan, confirms they are physically within **50 meters** of the event location, and only then records them as present. It is built for organizations, schools, and recurring events where attendance records need to be genuinely hard to fake — you have to *be there*, in person.
+**BeThere** is the backend that powers a full-stack **smart attendance system** that verifies **live presence**: a person scans a **rotating code shown on a screen at the venue** to prove they are physically there, then a short **face-liveness check** confirms it is really them, live. Both are verified **entirely on the server**, from raw camera frames, so the check cannot be faked by tampering with the app. It is built for organizations, schools, and recurring events where attendance records need to be genuinely hard to fake: you have to *be there*, in person.
 
-This repository is the **API and background job engine**. It handles authentication, event and session scheduling, geolocation validation, face-scan storage/matching, and organization-wide attendance analytics. The companion frontend lives in [BeThere-client](https://github.com/nuru484/BeThere-client.git).
+This repository is the **API and background job engine**. It handles authentication, event and session scheduling, the rotating venue codes, server-side face verification, encrypted biometric storage, evidence/anomaly/audit trails, and organization-wide analytics. The companion frontend lives in [BeThere-client](https://github.com/nuru484/BeThere-client.git).
 
-> **One-line pitch:** Attendance you can't fake — face recognition + GPS verification confirm the right person showed up at the right place, in real time.
+> **One-line pitch:** Verified live presence. Scan the venue's live code, then a real-time face check confirms it's you, all verified on the server, not your phone.
+
+> **On the security claim:** no browser-based system is literally unfakeable (only a native app with hardware attestation fully closes live-relay collusion). BeThere is built to be *as close as a web app gets*: it defeats the practical attacks (posting a fake descriptor, replaying a photo, a stale screenshotted code) and leaves a reviewable evidence trail for the rest.
 
 ---
 
 ## 🧠 How It Works
 
-**1. Face enrollment & matching.**
-Facial descriptors are produced in the browser with **face-api.js** (the frontend captures 3 samples and averages them into a single **128-dimension descriptor**). This server stores that descriptor on the `User` record (`faceScan` JSON) and uses it as the reference signature for future verification. Matching is performed by Euclidean distance against the enrolled descriptor.
+**1. Enrollment (consented, encrypted).**
+A user enrolls their face once. The 128-dimension descriptor is produced in the browser with **face-api.js**, but the server stores it **AES-256-GCM encrypted at rest** (`faceScanEnc`) and decrypts it only in memory at match time; the raw descriptor never leaves the server. Enrollment requires explicit **biometric consent** (GDPR Art. 9 / BIPA), and deletion destroys the template.
 
-**2. Location + time gate.**
-On check-in / check-out the client sends the user's live GPS coordinates. The attendance controller uses **@turf/turf** to compute the geodesic distance between the user and the event's stored location and **rejects anyone beyond 50 meters**. It also enforces the session's daily time window and stamps the record as **PRESENT** when within an hour of the start time, otherwise **LATE** (status enum: `PRESENT / LATE / ABSENT`).
+**2. Presence: the rotating venue code.**
+Each event has a server-side secret. A screen at the venue shows a QR that rotates every **30 seconds**; the codes are stateless keyed hashes of the secret and the current time window, so nothing polls or writes the database to rotate them (the display fetches a batch and cycles locally). Scanning the current code is the presence gate. A screenshotted code is stale within seconds.
 
-**3. Automated recurring sessions.**
-Events can be one-off or **recurring** (every X days, with a duration and a daily open/close window). A **BullMQ + Redis** pipeline (`session-scheduler.js` → `session-worker.js`, orchestrated by `worker.js`) automatically generates `Session` records for upcoming occurrences, deduplicates them, and runs as a **separate worker process** on Render. **date-fns** handles all date math.
+**3. Identity: server-side liveness.**
+Check-in and check-out are a two-step handshake. A fail-fast preflight (valid venue code + enrollment + session window) issues a **randomized action sequence** (turn, blink, smile) and a single-use challenge token. The client uploads raw frames performing those actions, and the server verifies, from the pixels: the actions happened, the face matches the enrolled template, it is not a replayed descriptor, and it is one continuous person. Only then is attendance recorded (**PRESENT / LATE**). Failed attempts are retained as flagged evidence and an anomaly for review.
 
-**4. Roles & dashboards.**
-Two roles (`ADMIN`, `USER`). **Users** check in/out of active sessions and view their own attendance history. **Admins** create/update/delete events, manage user records, **reset a user's face scan** when needed, and pull organization-wide analytics — attendance by user, by event, and totals of users / events / active sessions.
+**4. Automated recurring sessions.**
+Events can be one-off or **recurring** (every X days, with a duration and a daily open/close window). A **BullMQ + Redis** pipeline (`session-scheduler.js` -> `session-worker.js`, orchestrated by `worker.js`) automatically generates `Session` records for upcoming occurrences, deduplicates them, and runs as a **separate worker process**. **date-fns** handles all date math.
 
-**5. Auth & security.**
-Stateless **JWT** access + refresh tokens, role-based access control, password reset via hashed tokens delivered over email (nodemailer + EJS), **Cloudinary** for secure face-scan and profile-picture storage, CORS locked to trusted origins, and structured logging with **pino**.
+**5. Roles, dashboards, and audit.**
+Two roles (`ADMIN`, `USER`). **Users** check in/out and view their own history. **Admins** create/update/delete events, open the venue-code display, manage users, reset a user's face scan, review anomaly flags and evidence, and pull organization-wide analytics. Every check-in and biometric action is written to an append-only **audit log**.
+
+**6. Auth & security.**
+Cookie-only **JWT** access + refresh tokens with **refresh-token rotation and replay-as-theft detection**, a per-request session-epoch check, role-based access control, passwordless OTP login and optional 2FA, password reset via hashed tokens (nodemailer + EJS), **Cloudinary** for image storage, CORS locked to trusted origins, Redis-backed rate limiting, and structured logging with **pino**. A scheduled retention sweep purges expired auth material, challenges, evidence, and dormant biometric templates.
 
 ---
 
@@ -47,35 +52,34 @@ Stateless **JWT** access + refresh tokens, role-based access control, password r
 
 ### 👥 User Capabilities
 
-* Register and authenticate via JWT tokens.
-* Upload facial data captured via **face-api.js** (handled by the frontend).
-* Sign in and out of events using real-time facial recognition.
-* Attendance is only recorded if the user’s **current GPS coordinates match** the event’s registered location.
+* Register and authenticate (passwordless OTP login or password + optional 2FA).
+* Enroll a face once (consented; stored encrypted on the server).
+* Check in and out by scanning the venue's rotating code, then a live face-liveness check.
 * View personal attendance history and event details.
 
 ### 🧭 Admin Capabilities
 
-* Create, update, and delete events.
+* Create, update, and delete events (each gets a rotating venue code).
+* Open the **venue-code display** for an event (the screen shown at the location).
 * Define event recurrence, duration, and allowed check-in times.
-* Manage user records and reset user facial scans when required.
-* View detailed attendance analytics and dashboard reports.
+* Manage user records and reset a user's face template when required.
+* Review anomaly flags and check-in evidence; view attendance analytics and reports.
 
 ### ⚙️ Automated System Intelligence
 
 * **BullMQ + Redis** power recurring event **session generation**.
-* Automatically schedules and creates daily/recurring event sessions.
-* Verifies user locations in real-time using **@turf/turf** for geospatial accuracy.
-* **date-fns** manages all date and time calculations.
+* Rotating **venue codes** are stateless keyed hashes (no per-rotation DB load).
+* **date-fns** manages all date and time calculations (windows in the venue timezone).
+* A scheduled **retention sweep** purges expired auth material, challenges, evidence, and dormant biometric templates.
 * Robust **error handling**, **role-based access control**, and **input validation** via *express-validator*.
 
 ### 🔐 Authentication & Security
 
-* **JWT-based authentication** — short-lived access token plus a **refresh token** for session renewal via the `/refresh-token` route (`cookie-parser`).
-* **Password hashing** with bcrypt.
-* **Password reset** flow — hashed, expiring reset tokens (`PasswordReset` table) delivered by email via **nodemailer + EJS** templates.
-* **Role-based access control** (`ADMIN` and `USER`).
-* **Cloudinary** handles secure face scan and profile picture storage (uploads parsed with `multer`).
-* CORS protection for trusted origins only.
+* **Cookie-only JWT** access + refresh tokens with **rotation and replay-as-theft detection**, plus a per-request session-epoch check for instant revocation.
+* Passwordless **OTP login**, optional **2FA**, and a hashed-token **password reset** flow (`nodemailer` + EJS).
+* **Server-side face verification** with **randomized-action liveness**; biometric templates **AES-256-GCM encrypted at rest**, decrypted only in memory.
+* **Consent + retention** for biometric data; flagged-attempt **evidence**, **anomaly flags**, and an append-only **audit log**.
+* Redis-backed **rate limiting**, `helmet`, bcrypt password hashing, **Cloudinary** image storage (parsed with `multer`), and CORS locked to trusted origins.
 
 ---
 
@@ -90,7 +94,9 @@ Stateless **JWT** access + refresh tokens, role-based access control, password r
 | **Password Hashing**   | bcrypt                                          |
 | **Cookies**            | cookie-parser (refresh-token cookie)          |
 | **Job Queue**          | Redis + BullMQ (via ioredis)                  |
-| **Geolocation**        | @turf/turf                                     |
+| **Face verification**  | @vladmandic/face-api on the tfjs WASM backend |
+| **Presence**           | Rotating venue codes (HMAC-SHA256, time-windowed) |
+| **Biometric crypto**   | AES-256-GCM (templates encrypted at rest)     |
 | **Date Handling**      | date-fns                                        |
 | **File Uploads**       | multer (multipart parsing)                    |
 | **File Storage**       | Cloudinary                                      |
@@ -118,14 +124,14 @@ Session Scheduler → Session Worker (background)
 
 **Key Data Flow:**
 
-1. User scans face on the client → face data sent to API.
-2. Server stores or compares with existing facial data in PostgreSQL.
-3. On event sign-in/out, the server validates both:
+1. Enrollment: the client computes a face descriptor; the server stores it encrypted.
+2. On sign-in/out, the client sends the scanned venue code, then uploads raw face frames.
+3. The server validates both, from its own data and the pixels:
 
-   * User’s face (via pre-stored embeddings).
-   * User’s geolocation using `@turf/turf`.
-4. Validations pass → Attendance record created.
-5. Background workers auto-generate sessions for upcoming recurring events.
+   * Presence: the scanned code matches the event's current rotating code.
+   * Identity + liveness: the frames perform the randomized actions and match the enrolled template.
+4. Validations pass -> Attendance record created (failed attempts -> flagged evidence + anomaly).
+5. Background workers auto-generate sessions and run the retention sweep.
 
 ---
 
@@ -176,6 +182,24 @@ cd bethere-server
 # Install dependencies
 npm install
 ```
+
+### Face models & the biometric key
+
+Server-side face verification needs two things in place:
+
+```bash
+# 1. The face-api model weights must live under FACE_MODELS_PATH (default ./models).
+#    They ship in this repo's ./models directory. If missing, copy them from the
+#    client's public/models (tiny_face_detector, face_landmark_68, face_recognition,
+#    face_expression).
+
+# 2. Generate the biometric encryption key (required) and put it in .env:
+openssl rand -hex 32   # -> FACE_TEMPLATE_ENC_KEY
+```
+
+> The face engine runs on the pure-JS **tfjs WASM backend** (no native build), so it
+> installs anywhere. Budget ~1 GB RAM for the process holding the models. Set
+> `LIVENESS_ENABLED=false` to skip the models in local/dev flows that don't need them.
 
 ### Database Setup
 

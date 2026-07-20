@@ -1,8 +1,9 @@
 #!/bin/sh
 set -e
 
-# Run pending migrations before boot unless explicitly skipped.
-if [ "${RUN_MIGRATIONS:-true}" = "true" ]; then
+# Run pending migrations before boot - WEB process only, so the worker
+# container never races the web container to apply the same migrations.
+if [ "${RUN_MIGRATIONS:-true}" = "true" ] && [ "${PROCESS_TYPE:-web}" != "worker" ]; then
   npx prisma migrate deploy
 fi
 
