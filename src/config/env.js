@@ -52,6 +52,30 @@ function envOptional(name) {
 }
 
 /**
+ * Reads the auth-cookie domain. Trimmed, and validated against the same shape
+ * Express's `cookie` serializer accepts - a malformed value (stray space,
+ * quotes, a full URL) would otherwise make `res.cookie` throw "option domain
+ * is invalid" and 500 EVERY login/refresh. Invalid input degrades to
+ * host-only cookies with a warning instead of taking auth down.
+ */
+function envCookieDomain(name) {
+  const raw = process.env[name];
+  if (!raw?.length) return undefined;
+  const value = raw.trim();
+  if (!value) return undefined;
+  const DOMAIN_RE =
+    /^\.?[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/i;
+  if (!DOMAIN_RE.test(value)) {
+    console.warn(
+      `Ignoring invalid ${name} "${raw}": not a valid cookie domain. ` +
+        `Using host-only cookies. Unset it, or use a bare domain like ".example.com".`
+    );
+    return undefined;
+  }
+  return value;
+}
+
+/**
  * Reads a required environment variable. Throws at startup if the variable is
  * missing or empty, so misconfigured deployments fail fast rather than at
  * runtime.
@@ -96,8 +120,9 @@ const ENV = {
   DEMO_ATTENDANT_EMAIL:
     envOptional("DEMO_ATTENDANT_EMAIL") ?? "demo-attendant@bethere.app",
 
-  /** Cookie scope for the auth cookies (unset = current host only). */
-  COOKIE_DOMAIN: envOptional("COOKIE_DOMAIN"),
+  /** Cookie scope for the auth cookies (unset = current host only). A
+   * malformed value degrades to host-only instead of 500-ing every login. */
+  COOKIE_DOMAIN: envCookieDomain("COOKIE_DOMAIN"),
   CORS_ACCESS: envOptional("CORS_ACCESS"),
   /** The venue timezone the "HH:MM" event windows are written in. */
   EVENT_TIMEZONE: envOptional("EVENT_TIMEZONE") ?? "Africa/Accra",
