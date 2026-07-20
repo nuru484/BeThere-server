@@ -7,6 +7,7 @@
     "postinstall": "prisma generate",
     "dev": "node --watch --env-file .env server",
     "migrate": "node --env-file .env ./node_modules/.bin/prisma migrate dev --name init",
+    "migrate:deploy": "node --env-file .env ./node_modules/.bin/prisma migrate deploy",
     "start": "node server.js",
     "deploy": "npm install --include=dev && npx prisma generate",
     "seed": "node prisma/seed.js",
