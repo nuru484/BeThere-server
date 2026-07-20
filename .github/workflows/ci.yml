@@ -47,7 +47,10 @@ jobs:
       - run: npm ci
       - run: npm run lint
       # Schema drift gate: a schema.prisma edit committed without a migration
-      # fails here instead of surfacing at deploy time.
+      # fails here instead of surfacing at deploy time. prisma migrate diff
+      # does not create its shadow database, so create it first.
+      - name: Create drift-check database
+        run: PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE bethere_drift_check;"
       - name: Check migrations match schema
         run: npx prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code
         env:
