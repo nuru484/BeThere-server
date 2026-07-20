@@ -95,6 +95,26 @@ export const otpRequestLimiter = rateLimit({
 });
 
 /**
+ * Check-in/check-out surfaces. These were previously unlimited, which made the
+ * rotating venue code free to brute-force and let each failed attempt upload
+ * evidence frames to Cloudinary at our expense. A genuine attendee needs a
+ * couple of tries per event, so this is generous for real use and hostile to
+ * scripted probing.
+ */
+export const attendanceAttemptLimiter = rateLimit({
+  store: createStore("rl:attendance:"),
+  passOnStoreError: true,
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => ENV.NODE_ENV === "test",
+  message: rateLimitResponse(
+    "Too many check-in attempts. Please wait a few minutes and try again."
+  ),
+});
+
+/**
  * Refresh endpoint: a JWT verify + DB lookups per hit and the surface a stolen
  * token would be replayed against. Generous enough for normal 30-min rotation,
  * tight enough to stop rapid probing.
