@@ -9,7 +9,7 @@ import { clearAuthzCache } from "../src/utils/authz-cache.js";
 beforeEach(async () => {
   clearAuthzCache();
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "Attendance", "Session", "Event", "Location", "PasswordReset", "RefreshToken", "OtpCode", "Admin", "User" RESTART IDENTITY CASCADE'
+    'TRUNCATE TABLE "AttendanceEvidence", "AnomalyFlag", "LivenessChallenge", "AuditLog", "Attendance", "Session", "Event", "Location", "PasswordReset", "RefreshToken", "OtpCode", "Admin", "User" RESTART IDENTITY CASCADE'
   );
 });
 

@@ -1,9 +1,14 @@
 // test/helpers.js
+import crypto from "node:crypto";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import ENV from "../src/config/env.js";
 import { prisma } from "../src/config/prisma-client.js";
 import { issueSession } from "../src/services/auth.service.js";
+import { upcomingCodes } from "../src/services/venue-code.service.js";
+
+/** The current valid rotating venue code for a known secret (test helper). */
+export const venueCodeFor = (venueSecret) => upcomingCodes(venueSecret)[0].code;
 
 /** A stable fake face-api descriptor (128 floats). */
 export const DESCRIPTOR = Array.from({ length: 128 }, (_, i) =>
@@ -87,12 +92,9 @@ export function cookiesFromResponse(res) {
  * Event + location + a session covering today, with an all-day check-in
  * window so time-of-day never flakes a test.
  */
-export async function createEventWithActiveSession({
-  latitude = 6.6885,
-  longitude = -1.6244,
-} = {}) {
+export async function createEventWithActiveSession() {
   const location = await prisma.location.create({
-    data: { name: "Test Hall", latitude, longitude },
+    data: { name: "Test Hall" },
   });
 
   const today = new Date();
@@ -100,6 +102,11 @@ export async function createEventWithActiveSession({
 
   const endOfToday = new Date(today);
   endOfToday.setHours(23, 59, 0, 0);
+
+  // venueSecret is set here (the service sets it on real creates); the global
+  // omit hides it from query results, so it is returned separately for tests
+  // to compute a valid rotating code.
+  const venueSecret = crypto.randomBytes(16).toString("hex");
 
   const event = await prisma.event.create({
     data: {
@@ -110,6 +117,7 @@ export async function createEventWithActiveSession({
       endTime: "23:59",
       locationId: location.id,
       type: "MEETING",
+      venueSecret,
     },
   });
 
@@ -123,5 +131,9 @@ export async function createEventWithActiveSession({
     },
   });
 
-  return { location, event, session };
+  // The API omits venueSecret from every response; attach it to the returned
+  // event for test convenience so a test can compute a valid rotating code.
+  event.venueSecret = venueSecret;
+
+  return { location, event, session, venueSecret };
 }
