@@ -93,6 +93,41 @@ export const otpRequestLimiter = rateLimit({
   ),
 });
 
+/**
+ * Refresh endpoint: a JWT verify + DB lookups per hit and the surface a stolen
+ * token would be replayed against. Generous enough for normal 30-min rotation,
+ * tight enough to stop rapid probing.
+ */
+export const refreshTokenLimiter = rateLimit({
+  store: createStore("rl:refresh:"),
+  passOnStoreError: true,
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === "test",
+  message: rateLimitResponse(
+    "Too many refresh attempts. Please try again in a few minutes."
+  ),
+});
+
+/**
+ * Demo login: every hit mints a session, so skipSuccessfulRequests would never
+ * limit it. Counts all attempts to cap abuse of the open portfolio endpoint.
+ */
+export const demoLoginLimiter = rateLimit({
+  store: createStore("rl:demo:"),
+  passOnStoreError: true,
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === "test",
+  message: rateLimitResponse(
+    "Too many demo logins. Please try again in a few minutes."
+  ),
+});
+
 export const otpVerifyLimiter = rateLimit({
   store: createStore("rl:otp-verify:"),
   passOnStoreError: true,

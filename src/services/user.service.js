@@ -5,7 +5,6 @@
 // domain rules (conflict checks, owner-or-admin gates, session revocation
 // on sensitive changes) live here.
 import bcrypt from "bcrypt";
-import cloudinary from "cloudinary";
 import { prisma } from "../config/prisma-client.js";
 import { BCRYPT_SALT_ROUNDS } from "../config/constants.js";
 import {
@@ -13,7 +12,7 @@ import {
   ConflictError,
   NotFoundError,
 } from "../middleware/error-handler.js";
-import { extractPublicIdFromUrl } from "../utils/extractPublicIdFromUrl.js";
+import { deleteImage, uploadImage } from "../utils/cloudinary.js";
 import { assertSelfOrAdmin } from "../utils/authorization.js";
 import { revokeAllSessions, toSafeUser } from "./auth.service.js";
 
@@ -28,7 +27,13 @@ export const USER_SELECT = {
   email: true,
   profilePicture: true,
   phone: true,
+  // Selected only so toSafeUser can collapse to a boolean; the hash itself is
+  // stripped before the DTO leaves the service.
+  password: true,
+  // Both enrollment columns are selected only so toSafeUser can collapse them
+  // to hasFaceScan - neither the descriptor nor its ciphertext ever leaves.
   faceScan: true,
+  faceScanEnc: true,
   twoFactorEnabled: true,
   phoneVerified: true,
   createdAt: true,
@@ -63,7 +68,6 @@ export async function createUser({
   firstName,
   lastName,
   email,
-  password,
   phone,
 }) {
   await assertEmailAvailable(email);
@@ -71,14 +75,13 @@ export async function createUser({
     await assertPhoneAvailable(phone);
   }
 
-  const hashedPassword = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
-
+  // Passwordless by design: attendants sign in with a one-time code and
+  // may set a password themselves later (password-reset flow).
   const newUser = await prisma.user.create({
     data: {
       firstName,
       lastName,
       email,
-      password: hashedPassword,
       phone: phone || null,
     },
     select: USER_SELECT,
@@ -144,21 +147,29 @@ export async function softDeleteUser(actor, targetUserId) {
     throw new NotFoundError("User not found.");
   }
 
+  // Destroy biometric data on deletion (right-to-be-forgotten): a removed
+  // account must not leave an enrolled template or consent record behind.
   await prisma.user.update({
     where: { id: targetUserId },
-    data: { deletedAt: new Date() },
+    data: {
+      deletedAt: new Date(),
+      faceScan: null,
+      faceScanEnc: null,
+      biometricConsentAt: null,
+      biometricConsentVersion: null,
+      faceLastUsedAt: null,
+    },
   });
   await revokeAllSessions("USER", targetUserId);
 }
 
-/** Verifies the current password, sets the new one, revokes all sessions. */
+/**
+ * Sets or changes the user's password, then revokes all sessions.
+ * - Passwordless (OTP-only) accounts SET a first password with no current one.
+ * - Accounts that already have a password MUST supply the correct current one;
+ *   this is enforced here regardless of what the client sends.
+ */
 export async function changePassword(userId, currentPassword, newPassword) {
-  if (currentPassword === newPassword) {
-    throw new BadRequestError(
-      "New password cannot be the same as current password"
-    );
-  }
-
   const user = await prisma.user.findFirst({
     where: { id: userId },
     select: { password: true },
@@ -168,10 +179,23 @@ export async function changePassword(userId, currentPassword, newPassword) {
     throw new NotFoundError("User not found");
   }
 
-  const isMatch = await bcrypt.compare(currentPassword, user.password);
-  if (!isMatch) {
-    throw new BadRequestError("Current password is incorrect");
+  if (user.password) {
+    if (!currentPassword) {
+      throw new BadRequestError(
+        "Your current password is required to change it."
+      );
+    }
+    if (currentPassword === newPassword) {
+      throw new BadRequestError(
+        "New password cannot be the same as current password"
+      );
+    }
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      throw new BadRequestError("Current password is incorrect");
+    }
   }
+  // Passwordless: fall through and set the first password directly.
 
   const hashedNewPassword = await bcrypt.hash(newPassword, BCRYPT_SALT_ROUNDS);
 
@@ -209,34 +233,14 @@ export async function updateProfilePicture(actor, targetUserId, file) {
     throw new NotFoundError("User not found.");
   }
 
-  if (user.profilePicture) {
-    try {
-      const publicId = extractPublicIdFromUrl(user.profilePicture);
-      await cloudinary.v2.uploader.destroy(publicId);
-    } catch (error) {
-      console.error("Error deleting old profile picture:", error);
-    }
-  }
+  await deleteImage(user.profilePicture);
 
-  const uploadResult = await new Promise((resolve, reject) => {
-    const uploadStream = cloudinary.v2.uploader.upload_stream(
-      {
-        folder: "bethere",
-        quality: "auto",
-        fetch_format: "auto",
-      },
-      (error, result) => {
-        if (error) reject(error);
-        else resolve(result);
-      }
-    );
-    uploadStream.end(file.buffer);
-  });
+  const secureUrl = await uploadImage(file.buffer);
 
   const updatedUser = await prisma.user.update({
     where: { id: targetUserId },
     data: {
-      profilePicture: uploadResult.secure_url,
+      profilePicture: secureUrl,
     },
     select: USER_SELECT,
   });

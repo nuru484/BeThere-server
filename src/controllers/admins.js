@@ -2,9 +2,20 @@
 import { asyncHandler, ValidationError } from "../middleware/error-handler.js";
 import { HTTP_STATUS_CODES } from "../config/constants.js";
 import { validationMiddleware } from "../validation/validation-error-handler.js";
-import { addUserValidation, changePasswordValidation } from "../validation/users-validation.js";
+import {
+  addUserValidation,
+  changePasswordValidation,
+  updateUserProfileValidation,
+} from "../validation/users-validation.js";
 import { parsePagination, paginationMeta } from "../utils/pagination.js";
 import * as adminService from "../services/admin.service.js";
+
+const parseAdminId = (adminId) => {
+  if (!adminId || isNaN(parseInt(adminId))) {
+    throw new ValidationError("Valid admin ID is required.");
+  }
+  return parseInt(adminId);
+};
 
 const handleCreateAdmin = asyncHandler(async (req, res, _next) => {
   const data = await adminService.createAdmin(req.body);
@@ -30,13 +41,60 @@ export const getAllAdmins = asyncHandler(async (req, res, _next) => {
   });
 });
 
-export const deleteAdmin = asyncHandler(async (req, res, _next) => {
-  const { adminId } = req.params;
-  if (!adminId || isNaN(parseInt(adminId))) {
-    throw new ValidationError("Valid admin ID is required.");
-  }
+export const getAdminById = asyncHandler(async (req, res, _next) => {
+  const targetAdminId = parseAdminId(req.params.adminId);
 
-  await adminService.deleteAdmin(req.user, parseInt(adminId));
+  const data = await adminService.getAdminById(targetAdminId);
+
+  res.status(HTTP_STATUS_CODES.OK).json({
+    message: "Admin fetched successfully.",
+    data,
+  });
+});
+
+const handleUpdateAdminProfile = asyncHandler(async (req, res, _next) => {
+  const targetAdminId = parseAdminId(req.params.adminId);
+
+  const data = await adminService.updateAdminProfile(
+    req.user,
+    targetAdminId,
+    req.body
+  );
+
+  res.status(HTTP_STATUS_CODES.OK).json({
+    message: "Profile updated successfully.",
+    data,
+  });
+});
+
+// The profile fields are identical across principals, so the users
+// validation is reused; the uniqueness checks live in the admin service.
+export const updateAdminProfile = [
+  validationMiddleware.create(updateUserProfileValidation),
+  handleUpdateAdminProfile,
+];
+
+export const updateAdminProfilePicture = asyncHandler(
+  async (req, res, _next) => {
+    const targetAdminId = parseAdminId(req.params.adminId);
+
+    const data = await adminService.updateAdminProfilePicture(
+      req.user,
+      targetAdminId,
+      req.file
+    );
+
+    res.status(HTTP_STATUS_CODES.OK).json({
+      message: "Profile picture updated successfully.",
+      data,
+    });
+  }
+);
+
+export const deleteAdmin = asyncHandler(async (req, res, _next) => {
+  const targetAdminId = parseAdminId(req.params.adminId);
+
+  await adminService.deleteAdmin(req.user, targetAdminId);
 
   res.status(HTTP_STATUS_CODES.OK).json({ message: "Admin deleted successfully." });
 });

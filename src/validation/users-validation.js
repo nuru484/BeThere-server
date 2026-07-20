@@ -25,7 +25,15 @@ export const addUserValidation = [
     .withMessage("Invalid email format")
     .normalizeEmail(),
 
-  passwordRule("password"),
+  // No password on creation: admin-created attendants start passwordless
+  // and sign in via the OTP flow. Reject the field outright so stale
+  // clients fail loudly instead of silently dropping a credential.
+  body("password")
+    .not()
+    .exists()
+    .withMessage(
+      "Users are created without a password - they sign in with a one-time code."
+    ),
 
   body("phone")
     .optional({ nullable: true })
@@ -66,9 +74,10 @@ export const updateUserProfileValidation = [
 ];
 
 export const changePasswordValidation = [
-  body("currentPassword")
-    .exists({ checkFalsy: true })
-    .withMessage("Current password is required"),
+  // Optional here: passwordless (OTP-only) accounts set their first password
+  // without one. The service requires and verifies it whenever the account
+  // already has a password.
+  body("currentPassword").optional(),
 
   passwordRule("newPassword"),
 ];

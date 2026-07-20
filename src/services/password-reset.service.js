@@ -152,11 +152,18 @@ export const resetPassword = async ({ token, newPassword, confirmPassword }) => 
 
   const { resetRequest, principal } = await getUsableResetRequest(token);
 
-  const isSamePassword = await bcrypt.compare(newPassword, principal.password);
-  if (isSamePassword) {
-    throw new BadRequestError(
-      "New password must be different from your current password."
+  // Passwordless accounts (admin-created attendants) are SETTING their
+  // first password here, so there is nothing to compare against.
+  if (principal.password) {
+    const isSamePassword = await bcrypt.compare(
+      newPassword,
+      principal.password
     );
+    if (isSamePassword) {
+      throw new BadRequestError(
+        "New password must be different from your current password."
+      );
+    }
   }
 
   const hashedPassword = await bcrypt.hash(newPassword, BCRYPT_SALT_ROUNDS);

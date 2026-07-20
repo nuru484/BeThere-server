@@ -51,6 +51,7 @@ router.patch(
 router.patch(
   "/:userId/profile-picture",
   authenticateJWT,
+  authorizeRole(["ADMIN", "USER"]),
   upload.single("profilePicture"),
   updateProfilePicture
 );

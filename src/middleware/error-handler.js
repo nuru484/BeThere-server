@@ -128,7 +128,7 @@ export const errorHandler = (error, req, res, _next) => {
     ip: req.ip,
     body: sanitizedBody,
     params: req.params,
-    query: req.query,
+    query: sanitizeErrorData(req.query),
     severity,
     stack: !isProduction ? processedError.stack : undefined,
     timestamp: new Date().toISOString(),

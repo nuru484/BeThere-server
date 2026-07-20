@@ -41,3 +41,12 @@ export const twoFactorCodeValidation = [
     .matches(/^[0-9]{6}$/)
     .withMessage("Code must be 6 digits"),
 ];
+
+/** Which seeded demo principal to sign in as. */
+export const demoLoginValidation = [
+  body("role")
+    .exists({ checkFalsy: true })
+    .withMessage("A demo role is required.")
+    .isIn(["ADMIN", "USER"])
+    .withMessage("role must be 'ADMIN' or 'USER'."),
+];

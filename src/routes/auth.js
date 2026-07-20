@@ -2,8 +2,10 @@ import { Router } from "express";
 const router = Router();
 
 import {
+  demoLogin,
   login,
   logout,
+  me,
   otpRequest,
   otpVerify,
   twoFactorChallenge,
@@ -13,6 +15,7 @@ import {
 } from "../controllers/auth.js";
 import { authenticateJWT } from "../middleware/jwt-authentication.js";
 import {
+  demoLoginLimiter,
   loginLimiter,
   otpRequestLimiter,
   otpVerifyLimiter,
@@ -20,9 +23,13 @@ import {
 
 router.post("/login", loginLimiter, login);
 router.post("/login/2fa", otpVerifyLimiter, verify2fa);
+router.post("/demo-login", demoLoginLimiter, ...demoLogin);
 router.post("/otp/request", otpRequestLimiter, otpRequest);
 router.post("/otp/verify", otpVerifyLimiter, otpVerify);
 router.post("/logout", logout);
+
+// The signed-in principal, resolved from the cookie (client hydration).
+router.get("/me", authenticateJWT, me);
 
 // 2FA management for the signed-in principal (code-proven toggles).
 router.post("/2fa/challenge", authenticateJWT, twoFactorChallenge);

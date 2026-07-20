@@ -14,12 +14,14 @@
 // Every login method ends in the same issueSession(), so new grant types
 // (e.g. face-scan login) only add a new proof check in front of it.
 import crypto from "node:crypto";
-import { compare } from "bcrypt";
+import { compare, hash } from "bcrypt";
 import jwt from "jsonwebtoken";
 import ENV from "../config/env.js";
 import { prisma } from "../config/prisma-client.js";
 import {
   BadRequestError,
+  ForbiddenError,
+  NotFoundError,
   UnauthorizedError,
   ValidationError,
 } from "../middleware/error-handler.js";
@@ -34,6 +36,11 @@ const ACCESS_EXPIRY = "30m";
 const PENDING_2FA_EXPIRY = "5m";
 
 const hashJti = (jti) => crypto.createHash("sha256").update(jti).digest("hex");
+
+// A real bcrypt hash to compare against when no account (or no password) is
+// found, so the not-found path costs the same as a wrong-password path and
+// login timing can't be used to enumerate registered emails.
+const dummyHashPromise = hash("bethere-timing-equalizer", 10);
 
 const tableFor = (kind) => (kind === KIND_ADMIN ? prisma.admin : prisma.user);
 
@@ -56,8 +63,9 @@ export async function findPrincipalByEmail(email) {
 /** Strips secrets/biometrics and injects the role the client keys off. */
 export function toSafeUser(kind, principal) {
   const {
-    password: _password,
+    password,
     faceScan,
+    faceScanEnc,
     tokenVersion: _tv,
     deletedAt: _deletedAt,
     ...rest
@@ -65,7 +73,12 @@ export function toSafeUser(kind, principal) {
   return {
     ...rest,
     role: kind,
-    ...(kind === KIND_USER ? { hasFaceScan: faceScan != null } : {}),
+    // Lets the client decide whether the change-password form needs a current
+    // password field (passwordless OTP accounts set their first one).
+    hasPassword: password != null,
+    ...(kind === KIND_USER
+      ? { hasFaceScan: faceScan != null || faceScanEnc != null }
+      : {}),
   };
 }
 
@@ -106,16 +119,21 @@ export async function issueSession(kind, principal) {
  */
 export async function loginWithPassword(email, password) {
   const resolved = await findPrincipalByEmail(email);
+  const storedHash = resolved?.principal?.password;
 
-  if (!resolved || !password || !resolved.principal.password) {
+  // Always run exactly one bcrypt compare - against the real hash when we have
+  // one, against a dummy otherwise - so a missing account, a passwordless
+  // account, and a wrong password all take the same time.
+  const passwordMatches = await compare(
+    password ?? "",
+    storedHash ?? (await dummyHashPromise)
+  );
+
+  if (!resolved || !storedHash || !passwordMatches) {
     throw new ValidationError("Invalid Credentials");
   }
 
   const { kind, principal } = resolved;
-  const isPasswordValid = await compare(password, principal.password);
-  if (!isPasswordValid) {
-    throw new ValidationError("Invalid Credentials");
-  }
 
   if (principal.twoFactorEnabled) {
     const { channel } = await issueOtp({
@@ -180,8 +198,13 @@ export async function requestOtpLogin(identifier) {
     where: { OR: [{ phone: identifier }, { email: identifier }] },
   });
 
-  // Same answer whether or not the account exists.
-  if (!user) return { channel: null };
+  // Enumeration-safe: an unknown identifier gets the SAME shape as a known one,
+  // including a plausible channel inferred from its format, so the response
+  // body can't be used as an existence oracle. Nothing is actually sent.
+  if (!user) {
+    const looksLikePhone = /^\+?\d[\d\s-]{5,}$/.test(identifier ?? "");
+    return { channel: looksLikePhone ? "SMS" : "EMAIL" };
+  }
 
   const { channel } = await issueOtp({
     kind: KIND_USER,
@@ -216,6 +239,30 @@ export async function verifyOtpLogin(identifier, code) {
 
   const tokens = await issueSession(KIND_USER, user);
   return { ...tokens, user: toSafeUser(KIND_USER, user) };
+}
+
+/**
+ * One-click demo login (portfolio only). Signs into the seeded demo account
+ * for the requested role and issues a normal session - no credentials ever
+ * touch the client. Gated by DEMO_LOGIN_ENABLED so it is inert unless a
+ * deployment explicitly opts in.
+ */
+export async function demoLogin(role) {
+  if (!ENV.DEMO_LOGIN_ENABLED) {
+    throw new ForbiddenError("Demo login is not enabled.");
+  }
+  const kind = role === KIND_ADMIN ? KIND_ADMIN : KIND_USER;
+  const email = kind === KIND_ADMIN ? ENV.DEMO_ADMIN_EMAIL : ENV.DEMO_ATTENDANT_EMAIL;
+
+  const principal = await tableFor(kind).findFirst({ where: { email } });
+  if (!principal) {
+    throw new NotFoundError(
+      "The demo account is not set up. Seed the database first."
+    );
+  }
+
+  const tokens = await issueSession(kind, principal);
+  return { ...tokens, user: toSafeUser(kind, principal) };
 }
 
 /**
@@ -272,6 +319,18 @@ export async function rotateRefreshToken(token) {
 
   const tokens = await issueSession(decoded.kind, principal);
   return { ...tokens, user: toSafeUser(decoded.kind, principal) };
+}
+
+/**
+ * Retention: deletes refresh-token rows past their expiry. Consumed-but-
+ * unexpired rows are KEPT on purpose - the replay-as-theft check needs them to
+ * recognise a stolen token during its 7-day validity window.
+ */
+export async function cleanupExpiredRefreshTokens() {
+  const { count } = await prisma.refreshToken.deleteMany({
+    where: { expiresAt: { lt: new Date() } },
+  });
+  return count;
 }
 
 /** Consumes the presented refresh token (idempotent, never throws). */

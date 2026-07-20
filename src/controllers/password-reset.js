@@ -27,7 +27,7 @@ export const requestPasswordReset = [
 ];
 
 const handleVerifyResetToken = asyncHandler(async (req, res) => {
-  const data = await passwordResetService.verifyResetToken(req.query.token);
+  const data = await passwordResetService.verifyResetToken(req.body.token);
   res.status(HTTP_STATUS_CODES.OK).json({
     message: "Token is valid. You can proceed to reset your password.",
     data,

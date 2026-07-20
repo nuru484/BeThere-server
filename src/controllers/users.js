@@ -27,13 +27,12 @@ const parseUserId = (userId, message = "Valid user ID is required.") => {
 };
 
 const handleAddUser = asyncHandler(async (req, res, _next) => {
-  const { firstName, lastName, email, password, phone, role } = req.body;
+  const { firstName, lastName, email, phone, role } = req.body;
 
   const data = await userService.createUser({
     firstName,
     lastName,
     email,
-    password,
     phone,
     role,
   });

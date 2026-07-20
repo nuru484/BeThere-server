@@ -12,7 +12,21 @@ import { ForbiddenError, UnauthorizedError } from "../middleware/error-handler.j
 export function assertSelfOrAdmin(actor, targetUserId, message) {
   const actorId = parseInt(actor?.id?.toString() || "0");
   const isSelf = actor?.kind === "USER" && targetUserId === actorId;
-  if (!isSelf && actor?.role !== "ADMIN") {
+  // Both branches key off `kind` (the authoritative principal-table marker),
+  // not `role`, so the admin check can't be satisfied by a spoofed role claim.
+  if (!isSelf && actor?.kind !== "ADMIN") {
+    throw new UnauthorizedError(message);
+  }
+}
+
+/**
+ * Admin self-service mutations (profile, picture): an ADMIN may only touch
+ * their own Admin row - peers are managed through the dedicated admin
+ * management endpoints, not impersonated through profile updates.
+ */
+export function assertSelfAdmin(actor, targetAdminId, message) {
+  const actorId = parseInt(actor?.id?.toString() || "0");
+  if (actor?.kind !== "ADMIN" || actorId !== targetAdminId) {
     throw new UnauthorizedError(message);
   }
 }

@@ -2,9 +2,14 @@
 //
 // Thin HTTP adapters over the auth service. Tokens travel ONLY in httpOnly
 // cookies: bodies carry the safe user (and flow flags), never a token.
-import { asyncHandler, ValidationError } from "../middleware/error-handler.js";
+import {
+  asyncHandler,
+  UnauthorizedError,
+  ValidationError,
+} from "../middleware/error-handler.js";
 import { validationMiddleware } from "../validation/validation-error-handler.js";
 import {
+  demoLoginValidation,
   loginValidation,
   otpRequestValidation,
   otpVerifyValidation,
@@ -12,12 +17,14 @@ import {
 } from "../validation/auth.js";
 import { CookieManager } from "../utils/cookie-manager.js";
 import {
+  demoLogin as demoLoginService,
   findPrincipal,
   issueOtpForPrincipal,
   loginWithPassword,
   logout as logoutSession,
   requestOtpLogin,
   setTwoFactorEnabled,
+  toSafeUser,
   verifyOtpLogin,
   verifyTwoFactorLogin,
 } from "../services/auth-facade.js";
@@ -63,6 +70,34 @@ const handleVerify2fa = asyncHandler(async (req, res, _next) => {
 export const verify2fa = [
   validationMiddleware.create(twoFactorCodeValidation),
   handleVerify2fa,
+];
+
+/**
+ * The current principal, resolved from the httpOnly cookie. Lets the client
+ * hold the user in memory (fetched on load) instead of persisting it in
+ * localStorage.
+ */
+export const me = asyncHandler(async (req, res, _next) => {
+  const principal = await findPrincipal(req.user.kind, req.user.id);
+  if (!principal) {
+    throw new UnauthorizedError("Your session is no longer valid.");
+  }
+  res.json({
+    message: "Current user",
+    data: { user: toSafeUser(req.user.kind, principal) },
+  });
+});
+
+/** One-click demo login (portfolio): backend picks the seeded demo account. */
+const handleDemoLogin = asyncHandler(async (req, res, _next) => {
+  const result = await demoLoginService(req.body.role);
+  CookieManager.setAuthCookies(res, result);
+  res.json({ message: "Demo login successful", data: { user: result.user } });
+});
+
+export const demoLogin = [
+  validationMiddleware.create(demoLoginValidation),
+  handleDemoLogin,
 ];
 
 /** Passwordless OTP login, step 1 (attendants; phone-first). */

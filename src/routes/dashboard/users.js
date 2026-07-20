@@ -12,21 +12,21 @@ import { authenticateJWT } from "../../middleware/jwt-authentication.js";
 router.get(
   "/totals",
   authenticateJWT,
-  authorizeRole(["ADMIN", "USER"]),
+  authorizeRole(["USER"]),
   getUserDashboardTotals
 );
 
 router.get(
   "/recent-events",
   authenticateJWT,
-  authorizeRole(["ADMIN", "USER"]),
+  authorizeRole(["USER"]),
   getRecentEvents
 );
 
 router.get(
   "/attendance-data",
   authenticateJWT,
-  authorizeRole(["ADMIN", "USER"]),
+  authorizeRole(["USER"]),
   getUserAttendanceData
 );
 

@@ -8,6 +8,7 @@ import { issueOtp, verifyOtp } from "./otp.service.js";
 import { toSafeUser } from "./auth.service.js";
 
 export {
+  demoLogin,
   findPrincipal,
   findPrincipalByEmail,
   issueSession,

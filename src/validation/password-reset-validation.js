@@ -1,6 +1,5 @@
 import { body } from "express-validator";
 import { passwordRule } from "./password-rules.js";
-import { query } from "express-validator";
 
 export const requestPasswordResetValidation = [
   body("email")
@@ -11,8 +10,10 @@ export const requestPasswordResetValidation = [
     .normalizeEmail(),
 ];
 
+// Token travels in the BODY (not the query string) so it never lands in access
+// logs via the request URL.
 export const verifyResetTokenValidation = [
-  query("token")
+  body("token")
     .exists({ checkFalsy: true })
     .withMessage("Reset token is required.")
     .isLength({ min: 64, max: 64 })

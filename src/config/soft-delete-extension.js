@@ -7,7 +7,7 @@
 // explicitly wins - that is how "list deleted accounts" tooling would opt in.
 import { Prisma } from "@prisma/client";
 
-const SOFT_DELETE_MODELS = new Set(["User", "Event"]);
+const SOFT_DELETE_MODELS = new Set(["User", "Admin", "Event"]);
 const SCOPED_ACTIONS = new Set([
   "findMany",
   "findFirst",
