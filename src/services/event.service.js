@@ -264,10 +264,10 @@ export async function updateEvent(eventId, input, file) {
     },
   });
 
-  // The replaced/removed asset is deleted only after the row change stuck;
-  // deleteImage is best-effort and never fails the request.
+  // The replaced/removed asset is cleaned up off the response path once the row
+  // change stuck; deleteImage is best-effort and swallows its own errors.
   if (newCoverImage !== undefined && existingEvent.coverImage) {
-    await deleteImage(existingEvent.coverImage);
+    void deleteImage(existingEvent.coverImage);
   }
 
   await reconcileSessionSchedule(existingEvent, updatedEvent, {

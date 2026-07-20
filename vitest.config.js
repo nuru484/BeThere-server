@@ -15,7 +15,18 @@ function parseEnvFile(file) {
   const entries = {};
   for (const line of fs.readFileSync(file, "utf8").split("\n")) {
     const match = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
-    if (match) entries[match[1]] = match[2];
+    if (!match) continue;
+    // Strip a single pair of surrounding quotes, mirroring how node
+    // --env-file and dotenv read the same .env (e.g. DATABASE_URL="...").
+    let value = match[2];
+    if (
+      value.length >= 2 &&
+      (value[0] === '"' || value[0] === "'") &&
+      value.at(-1) === value[0]
+    ) {
+      value = value.slice(1, -1);
+    }
+    entries[match[1]] = value;
   }
   return entries;
 }

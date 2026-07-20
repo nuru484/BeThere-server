@@ -12,7 +12,7 @@ import {
 
 import { authorizeRole } from "../middleware/authorize-role.js";
 import { authenticateJWT } from "../middleware/jwt-authentication.js";
-import { upload } from "../config/multer-setup.js";
+import { frameUpload } from "../config/multer-setup.js";
 import { LIVENESS } from "../config/constants.js";
 
 // Step 1: fail-fast preflight that mints a randomized liveness challenge.
@@ -29,7 +29,7 @@ router.post(
   "/:eventId",
   authenticateJWT,
   authorizeRole(["USER"]),
-  upload.array("frames", LIVENESS.MAX_FRAMES),
+  frameUpload.array("frames", LIVENESS.MAX_FRAMES),
   ...createAttendance
 );
 
@@ -38,7 +38,7 @@ router.put(
   "/:eventId",
   authenticateJWT,
   authorizeRole(["USER"]),
-  upload.array("frames", LIVENESS.MAX_FRAMES),
+  frameUpload.array("frames", LIVENESS.MAX_FRAMES),
   ...updateAttendance
 );
 

@@ -45,6 +45,17 @@ describe("venue-code service", () => {
     expect(isValidVenueCode(SECRET, null)).toBe(false);
   });
 
+  it("rejects a crafted multibyte code WITHOUT throwing (no 500)", () => {
+    // 16 JS chars but 32 UTF-8 bytes: the old length-only guard let this reach
+    // timingSafeEqual, which RangeErrors on unequal buffer lengths -> a 500.
+    const multibyte = "é".repeat(16);
+    expect(() => isValidVenueCode(SECRET, multibyte)).not.toThrow();
+    expect(isValidVenueCode(SECRET, multibyte)).toBe(false);
+    // Right length, wrong alphabet also fails cleanly.
+    expect(isValidVenueCode(SECRET, "z".repeat(16))).toBe(false);
+    expect(isValidVenueCode(SECRET, "A".repeat(16))).toBe(false); // uppercase
+  });
+
   it("returns an ordered batch of the requested size", () => {
     const codes = upcomingCodes(SECRET);
     expect(codes).toHaveLength(VENUE_CODE.BATCH_SIZE);

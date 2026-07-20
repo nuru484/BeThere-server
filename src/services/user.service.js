@@ -233,8 +233,10 @@ export async function updateProfilePicture(actor, targetUserId, file) {
     throw new NotFoundError("User not found.");
   }
 
-  await deleteImage(user.profilePicture);
-
+  // Upload the new asset FIRST (so a failed upload never orphans the account
+  // without a picture), then swap the row. The old asset is cleaned up off the
+  // response path - deleteImage is best-effort and swallows its own errors.
+  const oldPicture = user.profilePicture;
   const secureUrl = await uploadImage(file.buffer);
 
   const updatedUser = await prisma.user.update({
@@ -244,6 +246,8 @@ export async function updateProfilePicture(actor, targetUserId, file) {
     },
     select: USER_SELECT,
   });
+
+  if (oldPicture) void deleteImage(oldPicture);
 
   return toSafeUser("USER", updatedUser);
 }

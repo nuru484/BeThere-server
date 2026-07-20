@@ -2,6 +2,7 @@
 import rateLimit from "express-rate-limit";
 import { RedisStore } from "rate-limit-redis";
 import { getRedisClient } from "../lib/redis.js";
+import ENV from "../config/env.js";
 
 /**
  * Counter store shared across instances: Redis when the shared client
@@ -70,7 +71,7 @@ export const loginLimiter = rateLimit({
   skipSuccessfulRequests: true,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: () => process.env.NODE_ENV === "test",
+  skip: () => ENV.NODE_ENV === "test",
   message: rateLimitResponse(
     "Too many failed login attempts. Please try again in a few minutes."
   ),
@@ -87,7 +88,7 @@ export const otpRequestLimiter = rateLimit({
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: () => process.env.NODE_ENV === "test",
+  skip: () => ENV.NODE_ENV === "test",
   message: rateLimitResponse(
     "Too many code requests. Please try again in a few minutes."
   ),
@@ -105,7 +106,7 @@ export const refreshTokenLimiter = rateLimit({
   max: 60,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: () => process.env.NODE_ENV === "test",
+  skip: () => ENV.NODE_ENV === "test",
   message: rateLimitResponse(
     "Too many refresh attempts. Please try again in a few minutes."
   ),
@@ -122,7 +123,7 @@ export const demoLoginLimiter = rateLimit({
   max: 30,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: () => process.env.NODE_ENV === "test",
+  skip: () => ENV.NODE_ENV === "test",
   message: rateLimitResponse(
     "Too many demo logins. Please try again in a few minutes."
   ),
@@ -136,7 +137,7 @@ export const otpVerifyLimiter = rateLimit({
   skipSuccessfulRequests: true,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: () => process.env.NODE_ENV === "test",
+  skip: () => ENV.NODE_ENV === "test",
   message: rateLimitResponse(
     "Too many attempts. Please try again in a few minutes."
   ),

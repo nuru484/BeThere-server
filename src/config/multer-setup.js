@@ -1,5 +1,6 @@
 import multer from "multer";
 import { BadRequestError } from "../middleware/error-handler.js";
+import { LIVENESS } from "./constants.js";
 
 const storage = multer.memoryStorage();
 
@@ -31,5 +32,17 @@ export const upload = multer({
   fileFilter,
   limits: {
     fileSize: 5 * 1024 * 1024, // 5MB max file size
+  },
+});
+
+// Check-in/out frame bursts: client-compressed JPEGs are tiny, so a tight
+// per-frame cap plus a hard file count keeps a check-in from buffering tens of
+// MB in memory (16 frames x 5MB would otherwise be the ceiling).
+export const frameUpload = multer({
+  storage,
+  fileFilter,
+  limits: {
+    fileSize: 1.5 * 1024 * 1024, // 1.5MB per frame
+    files: LIVENESS.MAX_FRAMES,
   },
 });

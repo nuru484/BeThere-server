@@ -13,6 +13,9 @@ import crypto from "node:crypto";
 import { prisma } from "../config/prisma-client.js";
 import { VENUE_CODE } from "../config/constants.js";
 
+/** Exactly the lowercase-hex shape codeForWindow mints. */
+const HEX_CODE_RE = new RegExp(`^[0-9a-f]{${VENUE_CODE.CODE_HEX_LENGTH}}$`);
+
 /** The time-window index for a moment (one window per PERIOD_MS). */
 const windowFor = (ms) => Math.floor(ms / VENUE_CODE.PERIOD_MS);
 
@@ -64,15 +67,16 @@ export function upcomingCodes(secret, now = Date.now(), count = VENUE_CODE.BATCH
  * Timing-safe comparison; a wrong-length code fails fast.
  */
 export function isValidVenueCode(secret, code, now = Date.now()) {
-  if (typeof code !== "string" || code.length !== VENUE_CODE.CODE_HEX_LENGTH) {
+  // Must be exactly the hex we mint. This also keeps the byte length equal to
+  // the string length, so timingSafeEqual (which throws on unequal-length
+  // buffers) can never RangeError on a crafted multibyte input.
+  if (typeof code !== "string" || !HEX_CODE_RE.test(code)) {
     return false;
   }
   const current = windowFor(now);
   for (let d = -VENUE_CODE.SKEW_WINDOWS; d <= VENUE_CODE.SKEW_WINDOWS; d++) {
     const expected = codeForWindow(secret, current + d);
-    if (
-      crypto.timingSafeEqual(Buffer.from(code), Buffer.from(expected))
-    ) {
+    if (crypto.timingSafeEqual(Buffer.from(code), Buffer.from(expected))) {
       return true;
     }
   }
