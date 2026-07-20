@@ -180,6 +180,39 @@ describe("evaluateLiveness", () => {
     expect(v.reasons).not.toContain("duplicate_frames");
   });
 
+  it("rejects a held photo: the smile threshold is met but nothing moves", () => {
+    // Every frame is smiling hard at a fixed angle - a photo, not a person.
+    // Each action's threshold is technically satisfied on every frame, but the
+    // signals never vary, so there is no live motion.
+    const frames = Array.from({ length: 6 }, (_, i) => ({
+      descriptor: near(0.04 + i * 0.0006), // distinct enough to not be "duplicate"
+      yaw: 25,
+      ear: 0.1,
+      happy: 0.9,
+      score: 0.9,
+    }));
+    const v = evaluateLiveness(frames, ENROLLED, ACTIONS, 0.6);
+    expect(v.passed).toBe(false);
+    expect(v.reasons).toContain("insufficient_motion");
+  });
+
+  it("rejects a burst padded with filler stills", () => {
+    // Two real frames plus a pile of identical filler: only half the burst is
+    // distinct, so the variation floor rejects it.
+    const filler = frame({ yaw: 25, ear: 0.1, happy: 0.9 });
+    const frames = [
+      frame({ yaw: 25 }),
+      frame({ happy: 0.9 }),
+      filler,
+      { ...filler },
+      { ...filler },
+      { ...filler },
+    ];
+    const v = evaluateLiveness(frames, ENROLLED, ACTIONS, 0.6);
+    expect(v.passed).toBe(false);
+    expect(v.reasons).toContain("insufficient_variation");
+  });
+
   it("fails with too few usable frames", () => {
     const v = evaluateLiveness([frame(), frame()], ENROLLED, ACTIONS, 0.6);
     expect(v.passed).toBe(false);

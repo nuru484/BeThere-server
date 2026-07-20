@@ -55,7 +55,7 @@ async function assertDescriptorNotEnrolledElsewhere(userId, descriptor, ip) {
     for (const other of batch) {
       let enrolled;
       try {
-        enrolled = decryptTemplate(other.faceScanEnc);
+        enrolled = decryptTemplate(other.faceScanEnc, { userId: other.id });
       } catch (error) {
         // A corrupt template cannot match anything; skip it.
         logger.error(error, `Corrupt face template for user ${other.id}`);
@@ -208,7 +208,7 @@ export async function enrollFaceScan(
   const claimed = await prisma.user.updateMany({
     where: { id: userId, faceScanEnc: null },
     data: {
-      faceScanEnc: encryptTemplate(verdict.descriptor),
+      faceScanEnc: encryptTemplate(verdict.descriptor, { userId }),
       biometricConsentAt: new Date(),
       biometricConsentVersion: BIOMETRIC_CONSENT_VERSION,
       faceLastUsedAt: new Date(),

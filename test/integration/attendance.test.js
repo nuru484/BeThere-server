@@ -78,6 +78,22 @@ describe("POST /attendance/:eventId/challenge (preflight)", () => {
     expect(res.status).toBe(400);
     expect(res.body.message).toMatch(/no enrolled face/i);
   });
+
+  it("rejects a template consented under an outdated policy version", async () => {
+    const user = await enrolled("c4@test.local");
+    // Simulate a consent-notice bump: the stored version no longer matches the
+    // current one, so the attendant must re-consent before checking in.
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { biometricConsentVersion: "2020-01-old" },
+    });
+    const { event } = await createEventWithActiveSession();
+
+    const res = await requestChallenge(user, event);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("BIOMETRIC_CONSENT_STALE");
+  });
 });
 
 describe("POST /attendance/:eventId (check-in)", () => {

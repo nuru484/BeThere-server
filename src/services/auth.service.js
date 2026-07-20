@@ -434,12 +434,19 @@ export async function logout(token) {
     const decoded = jwt.verify(token, ENV.REFRESH_TOKEN_SECRET, {
       algorithms: JWT_ALGORITHMS,
     });
-    if (decoded?.jti) {
-      // DELETE rather than mark consumed. A consumed row is indistinguishable
-      // from one retired by normal rotation, and the rotation-race leeway in
-      // rotateRefreshToken would happily re-issue a session from it - i.e. a
-      // logged-out token would still buy a new session for a few seconds.
-      // Removing the row makes the token unconditionally dead.
+    if (decoded?.kind && decoded?.id) {
+      // Bump the session epoch AND purge every refresh token for this
+      // principal, not just the presented jti. Deleting one row left the
+      // access token already in the browser valid for the rest of its 30m
+      // life, so a token captured off a shared machine kept working after the
+      // user clicked "log out". revokeAllSessions increments tokenVersion,
+      // which the per-request epoch check rejects immediately, matching how
+      // password change/reset/deletion/theft already behave. It also clears
+      // the cached epoch (running outside a transaction), so the revocation
+      // takes effect on the very next request.
+      await revokeAllSessions(decoded.kind, decoded.id);
+    } else if (decoded?.jti) {
+      // Older tokens without a kind claim: fall back to killing just this jti.
       await prisma.refreshToken.deleteMany({
         where: { jtiHash: hashJti(decoded.jti) },
       });

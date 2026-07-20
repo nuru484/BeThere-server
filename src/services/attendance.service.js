@@ -16,6 +16,7 @@ import {
 } from "../middleware/error-handler.js";
 import {
   ATTENDANCE_LATE_GRACE_MS,
+  BIOMETRIC_CONSENT_VERSION,
   LIVENESS,
   VENUE_CODE,
 } from "../config/constants.js";
@@ -87,10 +88,14 @@ export async function resolveActiveSession(eventId, now) {
  * Throws when nothing valid is enrolled.
  */
 function resolveEnrolledDescriptor(user) {
+  // Defense in depth: the preflight already checks this, but check-in/out call
+  // straight here, so a stale-consent template is refused on every path.
+  assertConsentCurrent(user);
+
   let enrolled = null;
   if (user.faceScanEnc) {
     try {
-      enrolled = decryptTemplate(user.faceScanEnc);
+      enrolled = decryptTemplate(user.faceScanEnc, { userId: user.id });
     } catch (error) {
       logger.error(error, `Corrupt face template for user ${user.id}`);
       throw new BadRequestError(
@@ -114,6 +119,32 @@ function assertEnrolled(user) {
   if (!user.faceScanEnc && !user.faceScan) {
     throw new BadRequestError(
       "No enrolled face found for your account. Please contact an admin to enroll your face scan."
+    );
+  }
+}
+
+/**
+ * The template was enrolled under the biometric-consent notice in force at the
+ * time. When that notice materially changes the policy version is bumped, and a
+ * template still carrying an older (or absent) version must not keep verifying
+ * check-ins under stale consent - GDPR Art. 9 / BIPA consent is specific to
+ * what was agreed to. Re-enrollment (admin reset, then the user re-enrolls with
+ * the current notice) refreshes it. Enforced as "not equal" rather than a
+ * version ordering, because the version string is an opaque policy tag.
+ */
+function assertConsentCurrent(user) {
+  // Gate templates that RECORDED a consent version which no longer matches: a
+  // policy-version bump then forces those users to re-consent. A null version
+  // is a legacy/plaintext enrollment from before consent-version tracking; it
+  // is left to the normal enrollment path rather than locking the user out on
+  // the deploy that introduces this check.
+  if (
+    user.biometricConsentVersion &&
+    user.biometricConsentVersion !== BIOMETRIC_CONSENT_VERSION
+  ) {
+    throw new BadRequestError(
+      "Your biometric consent is out of date. Please contact an admin to reset your face scan so you can re-enroll under the current consent notice.",
+      { code: "BIOMETRIC_CONSENT_STALE" }
     );
   }
 }
@@ -245,6 +276,7 @@ export async function prepareAttendanceChallenge(
 ) {
   const user = await findUserOrThrow(userId);
   assertEnrolled(user);
+  assertConsentCurrent(user);
 
   // Tight tolerance here: this IS the moment the code is scanned.
   await assertValidVenueCode(eventId, venueCode);

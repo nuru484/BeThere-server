@@ -39,11 +39,15 @@ export const LIVENESS = {
   ACTIONS: ["TURN_LEFT", "TURN_RIGHT", "BLINK", "SMILE"],
   // How many actions make up one challenge (drawn without repetition).
   ACTIONS_PER_CHALLENGE: 3,
-  // Challenge lifetime; short so a leaked token is near-useless, but long
-  // enough that performing three prompted actions and uploading a multi-frame
-  // burst on a slow mobile network does not loop on CHALLENGE_EXPIRED (the
-  // venue-code skew was widened for the same real-world flow).
-  CHALLENGE_TTL_MS: 120 * 1000,
+  // Challenge lifetime. This is the dominant term in the venue-code upload
+  // acceptance window (UPLOAD_SKEW_WINDOWS in attendance.service.js is derived
+  // from it), so 120s meant a scanned code stayed valid for ~5 minutes at
+  // upload - long enough to photograph the QR, relay it off-site, and check in
+  // from anywhere. 60s keeps the honest flow comfortable (three prompted
+  // actions + a multi-frame burst on a slow phone) while collapsing that
+  // window to ~3 minutes. Do not raise it without re-checking the derived
+  // upload skew.
+  CHALLENGE_TTL_MS: 60 * 1000,
   // Frame bounds for one capture upload.
   MIN_FRAMES: 6,
   MAX_FRAMES: 16,
@@ -61,6 +65,17 @@ export const LIVENESS = {
   // above the match threshold: two people's descriptors are typically ~1.0+
   // apart, the same person's well under the 0.6 match line.
   CONTINUITY_MAX_DISTANCE: 1.0,
+  // A live capture MOVES. Beyond proving each action fired once, the challenged
+  // signals must show real RANGE across the burst, so a held photo (a fixed
+  // grin, a head frozen at an angle) fails even if a single frame clears a
+  // threshold. These are the min (max - min) spreads required when the
+  // corresponding action is part of the challenge.
+  SMILE_MIN_RANGE: 0.4,
+  EAR_MIN_RANGE: 0.08,
+  // At least this fraction of frames must be mutually distinct (not near-
+  // identical), so an attacker cannot pad two real frames with a pile of
+  // stills to squeak under the majority-duplicate check.
+  MIN_DISTINCT_RATIO: 0.6,
 };
 
 // Rotating venue code (proof of on-site presence). Codes are stateless keyed

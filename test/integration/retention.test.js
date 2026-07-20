@@ -56,6 +56,25 @@ describe("retention: dormant biometric templates", () => {
     expect(after.faceScan).not.toBeNull();
   });
 
+  it("reports a numeric count for EVERY task (a swallowed failure is null)", async () => {
+    // runRetention isolates each task and records null on failure, so a task
+    // that throws on every sweep (a botched query, a missing column) would go
+    // unnoticed if only one key were ever asserted. Every task must have run.
+    const counts = await runRetention();
+    for (const key of [
+      "resetTokens",
+      "otpCodes",
+      "refreshTokens",
+      "challenges",
+      "evidence",
+      "dormantTemplates",
+      "auditLogs",
+      "resolvedAnomalies",
+    ]) {
+      expect(typeof counts[key], `retention task "${key}" returned ${counts[key]}`).toBe("number");
+    }
+  });
+
   it("purges a dated template that has gone dormant, keeps an active one", async () => {
     const dormant = await enroll("dormant@test.local", {
       faceLastUsedAt: daysAgo(TEMPLATE_DORMANT_DAYS + 1),

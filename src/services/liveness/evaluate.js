@@ -41,6 +41,75 @@ function hasDuplicateFrames(frames) {
 
 const isTurn = (action) => action === "TURN_LEFT" || action === "TURN_RIGHT";
 
+/** Spread (max - min) of one per-frame signal across the burst. */
+function signalRange(frames, key) {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const f of frames) {
+    const v = f[key] ?? 0;
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  return max - min;
+}
+
+/**
+ * Fraction of frames that are NOT a near-duplicate of an earlier frame. A live
+ * burst is almost entirely novel frames; a padded one (a couple of real frames
+ * plus filler stills) is not.
+ */
+function distinctRatio(frames) {
+  let novel = 0;
+  for (let i = 0; i < frames.length; i++) {
+    const isDup = frames
+      .slice(0, i)
+      .some(
+        (earlier) =>
+          euclideanDistance(frames[i].descriptor, earlier.descriptor) <=
+          IDENTICAL_FRAME_DISTANCE
+      );
+    if (!isDup) novel++;
+  }
+  return novel / frames.length;
+}
+
+/**
+ * The "it actually moved" gate. Proving each action fired once (in order) is
+ * necessary but not sufficient: a still photo held at an angle clears the turn
+ * threshold on every frame yet never MOVES. So when an action is challenged,
+ * the signal it drives must show real range, and the burst must be mostly
+ * distinct frames. Returns the reasons to add (empty when the motion looks
+ * live).
+ *
+ * NOTE ON SCOPE: this raises the bar against photo / static / padded replays.
+ * It does NOT defeat a pre-recorded VIDEO of the real person - a video moves
+ * too, and nothing in a client-uploaded frame proves the pixels came from a
+ * live camera rather than a file. Closing that residual needs presentation-
+ * attack detection (screen/replay/depth), which is exactly what a certified
+ * liveness vendor slotted behind liveness-verifier.js provides.
+ */
+function motionReasons(frames, actions) {
+  const reasons = [];
+  const add = (reason) => {
+    if (!reasons.includes(reason)) reasons.push(reason);
+  };
+
+  if (actions.some(isTurn) && signalRange(frames, "yaw") < LIVENESS.YAW_TURN_DEGREES) {
+    add("insufficient_motion");
+  }
+  if (actions.includes("SMILE") && signalRange(frames, "happy") < LIVENESS.SMILE_MIN_RANGE) {
+    add("insufficient_motion");
+  }
+  if (actions.includes("BLINK") && signalRange(frames, "ear") < LIVENESS.EAR_MIN_RANGE) {
+    add("insufficient_motion");
+  }
+  if (distinctRatio(frames) < LIVENESS.MIN_DISTINCT_RATIO) {
+    add("insufficient_variation");
+  }
+
+  return reasons;
+}
+
 /**
  * Walks the burst in capture order and proves each action strictly after the
  * previous one. Returns the actions that could not be proven in sequence.
@@ -178,6 +247,9 @@ export function evaluateEnrollment(frames, actions, matchThreshold) {
 
   if (hasDuplicateFrames(frames)) reasons.push("duplicate_frames");
 
+  // The capture must exhibit live motion, not a held pose.
+  reasons.push(...motionReasons(frames, actions));
+
   // One person throughout: the burst must cluster around its own medoid, so a
   // mid-capture swap cannot blend two faces into a single enrolled template.
   const centre = frames[medoidIndex(frames)].descriptor;
@@ -252,6 +324,10 @@ export function evaluateLiveness(frames, enrolled, actions, matchThreshold) {
   // Re-submitted stills betray themselves: a live burst never contains two
   // essentially identical frames (same face, same pose, same expression).
   if (hasDuplicateFrames(frames)) reasons.push("duplicate_frames");
+
+  // The challenged signals must actually MOVE (a held photo does not), and the
+  // burst must be mostly distinct frames.
+  reasons.push(...motionReasons(frames, actions));
 
   const passed = reasons.length === 0;
 

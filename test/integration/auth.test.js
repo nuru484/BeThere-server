@@ -205,7 +205,7 @@ describe("POST /api/v1/refreshToken (cookie rotation)", () => {
 });
 
 describe("POST /api/v1/auth/logout", () => {
-  it("consumes the refresh token and clears the cookies", async () => {
+  it("revokes the session and clears the cookies", async () => {
     const user = await createAttendant({ email: "f@test.local" });
     const session = await sessionFor("USER", user);
 
@@ -215,10 +215,19 @@ describe("POST /api/v1/auth/logout", () => {
     expect(out.status).toBe(200);
     expect(out.headers["set-cookie"].join(";")).toMatch(/bethere_accessToken=;/);
 
+    // Refresh is dead...
     const res = await request(app)
       .post("/api/v1/refreshToken")
       .set("Cookie", [session.refreshCookie]);
     expect(res.status).toBe(401);
+
+    // ...and so is the ACCESS token already in the browser: logout bumps the
+    // session epoch, so a token captured off a shared machine cannot keep
+    // working for the rest of its 30m life after the user logs out.
+    const stillUsable = await request(app)
+      .get(`/api/v1/users/${user.id}`)
+      .set("Cookie", [session.cookies[0]]);
+    expect(stillUsable.status).toBe(401);
   });
 });
 

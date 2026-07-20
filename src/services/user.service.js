@@ -1,93 +1,45 @@
 // src/services/user.service.js
 //
-// User account mutations: creation, profile/role updates, soft deletion,
-// password change, and profile pictures. Controllers stay HTTP-only; the
-// domain rules (conflict checks, owner-or-admin gates, session revocation
-// on sensitive changes) live here.
-import bcrypt from "bcrypt";
+// USER (attendant) account mutations. The account primitives shared with the
+// admin side - uniqueness checks, profile edit, picture swap, password change
+// - live in principal-account.service.js; this file adds only the rules unique
+// to attendants: passwordless creation, biometric destruction on deletion, and
+// the owner-or-admin gate. Controllers stay HTTP-only.
 import { prisma } from "../config/prisma-client.js";
-import { BCRYPT_SALT_ROUNDS } from "../config/constants.js";
-import {
-  BadRequestError,
-  ConflictError,
-  NotFoundError,
-} from "../middleware/error-handler.js";
-import { deleteImage, uploadImage } from "../utils/cloudinary.js";
+import { NotFoundError } from "../middleware/error-handler.js";
 import { assertSelfOrAdmin } from "../utils/authorization.js";
 import {
   invalidateRevokedSessionsCache,
   revokeAllSessions,
   toSafeUser,
 } from "./auth.service.js";
+import {
+  PRINCIPAL_SELECT,
+  assertEmailAvailable,
+  assertPhoneAvailable,
+  changePassword as changePrincipalPassword,
+  updateProfile,
+  updateProfilePicture as updatePrincipalProfilePicture,
+} from "./principal-account.service.js";
 
 /**
- * The public user projection. faceScan is selected only so toSafeUser can
- * collapse it to hasFaceScan - the raw descriptor never leaves the server.
+ * The public user projection, re-exported for the query service. faceScan and
+ * the hash are selected only so toSafeUser can collapse them to booleans; the
+ * raw values never leave the server.
  */
-export const USER_SELECT = {
-  id: true,
-  firstName: true,
-  lastName: true,
-  email: true,
-  profilePicture: true,
-  phone: true,
-  // Selected only so toSafeUser can collapse to a boolean; the hash itself is
-  // stripped before the DTO leaves the service.
-  password: true,
-  // Both enrollment columns are selected only so toSafeUser can collapse them
-  // to hasFaceScan - neither the descriptor nor its ciphertext ever leaves.
-  faceScan: true,
-  faceScanEnc: true,
-  twoFactorEnabled: true,
-  phoneVerified: true,
-  createdAt: true,
-  updatedAt: true,
-};
+export const USER_SELECT = PRINCIPAL_SELECT.USER;
 
-// Uniqueness checks stay on findUnique ON PURPOSE: they bypass the
-// soft-delete scope, so a soft-deleted account still blocks reuse of its
-// email/phone.
-async function assertEmailAvailable(email, excludeUserId) {
-  const existing = await prisma.user.findUnique({ where: { email } });
-  if (existing && existing.id !== excludeUserId) {
-    throw new ConflictError("A user with this email already exists.");
-  }
-  // Emails are login identifiers across BOTH principal tables - an
-  // attendant sharing an admin's email would make login ambiguous.
-  const adminExisting = await prisma.admin.findUnique({ where: { email } });
-  if (adminExisting) {
-    throw new ConflictError("A user with this email already exists.");
-  }
-}
-
-async function assertPhoneAvailable(phone, excludeUserId) {
-  const existing = await prisma.user.findUnique({ where: { phone } });
-  if (existing && existing.id !== excludeUserId) {
-    throw new ConflictError("A user with this phone number already exists.");
-  }
-}
-
-/** Admin-only: creates an ATTENDANT account. */
-export async function createUser({
-  firstName,
-  lastName,
-  email,
-  phone,
-}) {
-  await assertEmailAvailable(email);
+/** Admin-only: creates a passwordless ATTENDANT account. */
+export async function createUser({ firstName, lastName, email, phone }) {
+  await assertEmailAvailable(email, { kind: "USER" });
   if (phone) {
-    await assertPhoneAvailable(phone);
+    await assertPhoneAvailable(phone, { kind: "USER" });
   }
 
-  // Passwordless by design: attendants sign in with a one-time code and
-  // may set a password themselves later (password-reset flow).
+  // Passwordless by design: attendants sign in with a one-time code and may
+  // set a password themselves later (password-reset flow).
   const newUser = await prisma.user.create({
-    data: {
-      firstName,
-      lastName,
-      email,
-      phone: phone || null,
-    },
+    data: { firstName, lastName, email, phone: phone || null },
     select: USER_SELECT,
   });
 
@@ -101,38 +53,7 @@ export async function updateUserProfile(actor, targetUserId, details) {
     targetUserId,
     "Only admins can update other users' profiles."
   );
-
-  // findFirst: a soft-deleted account reads as absent.
-  const existingUser = await prisma.user.findFirst({
-    where: { id: targetUserId },
-    select: { profilePicture: true, email: true, phone: true },
-  });
-
-  if (!existingUser) {
-    throw new NotFoundError("User not found.");
-  }
-
-  if (details.email && details.email !== existingUser.email) {
-    await assertEmailAvailable(details.email, targetUserId);
-  }
-
-  if (details.phone && details.phone !== existingUser.phone) {
-    await assertPhoneAvailable(details.phone, targetUserId);
-  }
-
-  const updateData = {};
-  if (details.firstName !== undefined) updateData.firstName = details.firstName;
-  if (details.lastName !== undefined) updateData.lastName = details.lastName;
-  if (details.email !== undefined) updateData.email = details.email;
-  if (details.phone !== undefined) updateData.phone = details.phone;
-
-  const updatedUser = await prisma.user.update({
-    where: { id: targetUserId },
-    data: updateData,
-    select: USER_SELECT,
-  });
-
-  return toSafeUser("USER", updatedUser);
+  return updateProfile({ kind: "USER", targetId: targetUserId, details });
 }
 
 /**
@@ -143,9 +64,7 @@ export async function updateUserProfile(actor, targetUserId, details) {
 export async function softDeleteUser(actor, targetUserId) {
   // findFirst so the soft-delete scope applies: an already-deleted account
   // reads as not found instead of being deleted twice.
-  const user = await prisma.user.findFirst({
-    where: { id: targetUserId },
-  });
+  const user = await prisma.user.findFirst({ where: { id: targetUserId } });
 
   if (!user) {
     throw new NotFoundError("User not found.");
@@ -178,90 +97,30 @@ export async function softDeleteUser(actor, targetUserId) {
 }
 
 /**
- * Sets or changes the user's password, then revokes all sessions.
- * - Passwordless (OTP-only) accounts SET a first password with no current one.
- * - Accounts that already have a password MUST supply the correct current one;
- *   this is enforced here regardless of what the client sends.
+ * Sets or changes the user's password, then revokes all sessions. Attendants
+ * may be passwordless (OTP-only), so a first password is set with no current
+ * one; an account that already has a password must supply the correct current.
  */
 export async function changePassword(userId, currentPassword, newPassword) {
-  const user = await prisma.user.findFirst({
-    where: { id: userId },
-    select: { password: true },
+  return changePrincipalPassword({
+    kind: "USER",
+    id: userId,
+    currentPassword,
+    newPassword,
+    allowPasswordless: true,
   });
-
-  if (!user) {
-    throw new NotFoundError("User not found");
-  }
-
-  if (user.password) {
-    if (!currentPassword) {
-      throw new BadRequestError(
-        "Your current password is required to change it."
-      );
-    }
-    if (currentPassword === newPassword) {
-      throw new BadRequestError(
-        "New password cannot be the same as current password"
-      );
-    }
-    const isMatch = await bcrypt.compare(currentPassword, user.password);
-    if (!isMatch) {
-      throw new BadRequestError("Current password is incorrect");
-    }
-  }
-  // Passwordless: fall through and set the first password directly.
-
-  const hashedNewPassword = await bcrypt.hash(newPassword, BCRYPT_SALT_ROUNDS);
-
-  await prisma.user.update({
-    where: { id: userId },
-    data: { password: hashedNewPassword },
-  });
-
-  // A changed password revokes every outstanding session - if it changed
-  // because of compromise, the attacker's tokens die with it.
-  await revokeAllSessions("USER", userId);
 }
 
-/**
- * Owner-or-admin profile picture replacement: destroys the previous
- * Cloudinary asset (best effort), uploads the new one, stores the URL.
- */
+/** Owner-or-admin profile picture replacement. */
 export async function updateProfilePicture(actor, targetUserId, file) {
   assertSelfOrAdmin(
     actor,
     targetUserId,
     "Only admins can update other users' profile pictures."
   );
-
-  if (!file) {
-    throw new BadRequestError("Profile picture file is required.");
-  }
-
-  const user = await prisma.user.findFirst({
-    where: { id: targetUserId },
-    select: { profilePicture: true },
+  return updatePrincipalProfilePicture({
+    kind: "USER",
+    targetId: targetUserId,
+    file,
   });
-
-  if (!user) {
-    throw new NotFoundError("User not found.");
-  }
-
-  // Upload the new asset FIRST (so a failed upload never orphans the account
-  // without a picture), then swap the row. The old asset is cleaned up off the
-  // response path - deleteImage is best-effort and swallows its own errors.
-  const oldPicture = user.profilePicture;
-  const secureUrl = await uploadImage(file.buffer);
-
-  const updatedUser = await prisma.user.update({
-    where: { id: targetUserId },
-    data: {
-      profilePicture: secureUrl,
-    },
-    select: USER_SELECT,
-  });
-
-  if (oldPicture) void deleteImage(oldPicture);
-
-  return toSafeUser("USER", updatedUser);
 }

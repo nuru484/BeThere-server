@@ -100,7 +100,8 @@ describe("POST /api/v1/facescan (server-side enrollment)", () => {
       "../../src/utils/biometric-crypto.js"
     );
     const stored = await prisma.user.findUnique({ where: { id: user.id } });
-    const template = decryptTemplate(stored.faceScanEnc);
+    // v2 ciphertext is owner-bound: decrypting requires the owning user id.
+    const template = decryptTemplate(stored.faceScanEnc, { userId: user.id });
     expect(template[0]).toBeCloseTo(DESCRIPTOR[0], 5);
     expect(template[0]).not.toBeCloseTo(forged[0], 5);
   });

@@ -88,6 +88,90 @@ function envRequired(name) {
 
 const GMAIL_USER = envRequired("GMAIL_USER");
 
+/** Decodes a 32-byte AES key from a 64-char hex or a base64 string. */
+function decodeKey32(raw, label) {
+  const value = raw.trim();
+  const key = /^[0-9a-fA-F]{64}$/.test(value)
+    ? Buffer.from(value, "hex")
+    : Buffer.from(value, "base64");
+  if (key.length !== 32) {
+    throw new Error(
+      `${label} must decode to 32 bytes (use \`openssl rand -hex 32\`).`
+    );
+  }
+  return key;
+}
+
+/**
+ * Resolves the biometric-template encryption keyring at BOOT so a short or
+ * garbled key fails fast with the variable named, rather than surfacing as a
+ * 500 on a user's first enrollment. Returns { keys: Map<id, Buffer(32)>,
+ * activeId }.
+ *
+ * Configure it either way:
+ *  - FACE_TEMPLATE_ENC_KEYS = "id1:material1,id2:material2,..." with an
+ *    optional FACE_TEMPLATE_ENC_ACTIVE_KEY_ID (default: the last id). New
+ *    templates encrypt under the active id; older ones keep decrypting under
+ *    whichever id they were written with, so the active key rotates WITHOUT
+ *    re-enrolling everyone. Keep an old key in the ring until nothing uses it.
+ *  - FACE_TEMPLATE_ENC_KEY = "material" (the original single-key form) still
+ *    works: it becomes a one-entry ring { v1: material } active "v1", which is
+ *    also the id any pre-keyring ciphertext was written with.
+ */
+function envKeyring() {
+  const multi = envOptional("FACE_TEMPLATE_ENC_KEYS");
+  const single = envOptional("FACE_TEMPLATE_ENC_KEY");
+  const keys = new Map();
+
+  if (multi) {
+    for (const entry of multi.split(",")) {
+      const trimmed = entry.trim();
+      if (!trimmed) continue;
+      const sep = trimmed.indexOf(":");
+      if (sep <= 0) {
+        throw new Error(
+          `Invalid FACE_TEMPLATE_ENC_KEYS entry "${entry}": expected "id:material".`
+        );
+      }
+      const id = trimmed.slice(0, sep).trim();
+      if (!/^[a-z0-9_-]{1,32}$/i.test(id)) {
+        throw new Error(
+          `Invalid key id "${id}" in FACE_TEMPLATE_ENC_KEYS: use [a-z0-9_-], up to 32 chars.`
+        );
+      }
+      if (keys.has(id)) {
+        throw new Error(`Duplicate key id "${id}" in FACE_TEMPLATE_ENC_KEYS.`);
+      }
+      keys.set(
+        id,
+        decodeKey32(trimmed.slice(sep + 1), `FACE_TEMPLATE_ENC_KEYS key "${id}"`)
+      );
+    }
+    if (keys.size === 0) {
+      throw new Error("FACE_TEMPLATE_ENC_KEYS was set but held no valid keys.");
+    }
+  } else if (single) {
+    keys.set("v1", decodeKey32(single, "FACE_TEMPLATE_ENC_KEY"));
+  } else {
+    throw new Error(
+      "Missing biometric key: set FACE_TEMPLATE_ENC_KEY (or FACE_TEMPLATE_ENC_KEYS)."
+    );
+  }
+
+  const requestedActive = envOptional("FACE_TEMPLATE_ENC_ACTIVE_KEY_ID");
+  if (requestedActive && !keys.has(requestedActive)) {
+    throw new Error(
+      `FACE_TEMPLATE_ENC_ACTIVE_KEY_ID "${requestedActive}" is not one of the configured keys.`
+    );
+  }
+  // The newest configured key by default (last entry), or "v1" single-key.
+  const activeId = requestedActive ?? [...keys.keys()].at(-1);
+
+  return { keys, activeId };
+}
+
+const FACE_KEYRING = envKeyring();
+
 const ENV = {
   ACCESS_TOKEN_SECRET: envRequired("ACCESS_TOKEN_SECRET"),
 
@@ -129,12 +213,15 @@ const ENV = {
   DATABASE_URL: envRequired("DATABASE_URL"),
 
   /**
-   * 32-byte key (hex or base64) that encrypts enrolled face templates at
-   * rest (AES-256-GCM). Required: biometric data must never sit in the DB in
-   * plaintext. Generate with `openssl rand -hex 32`. Rotating it invalidates
-   * existing templates (users re-enroll), so treat it like a signing secret.
+   * The biometric-template encryption keyring (AES-256-GCM), resolved and
+   * validated at boot by envKeyring() above. `FACE_TEMPLATE_ENC_KEYS` is a
+   * Map<keyId, Buffer(32)>; `FACE_TEMPLATE_ENC_ACTIVE_KEY_ID` is the id new
+   * templates are encrypted under. Biometric data must never sit in the DB in
+   * plaintext. Rotating the active key no longer invalidates existing
+   * templates - old keys stay in the ring until nothing references them.
    */
-  FACE_TEMPLATE_ENC_KEY: envRequired("FACE_TEMPLATE_ENC_KEY"),
+  FACE_TEMPLATE_ENC_KEYS: FACE_KEYRING.keys,
+  FACE_TEMPLATE_ENC_ACTIVE_KEY_ID: FACE_KEYRING.activeId,
   /**
    * Server-side liveness verification switch. On by default; tests and local
    * flows without the ML models set it false to skip the heavy face engine.

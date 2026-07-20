@@ -9,7 +9,8 @@
 // For every session whose daily window (event.endTime in the venue timezone,
 // plus a grace period) has closed and that has not been finalized yet:
 //   1. every active attendant WITHOUT a row for that session gets an ABSENT
-//      row (createMany + skipDuplicates: idempotent, race-safe),
+//      row via one set-based INSERT ... SELECT (idempotent, race-safe, never
+//      loading the user table into memory),
 //   2. rows checked in but never out get checkOutTime stamped to the
 //      session's end with autoCheckedOut = true, so the client can render
 //      "signed out by system" - a real face-verified check-out it is not,
@@ -44,32 +45,36 @@ export async function finalizeSession(session, { markAbsences, now = new Date() 
     let autoCheckedOut = 0;
 
     if (markAbsences) {
-      // Soft-deleted attendants are excluded by the Prisma extension's
-      // default scope on findMany.
-      const activeUsers = await tx.user.findMany({ select: { id: true } });
-      const existing = await tx.attendance.findMany({
-        where: { sessionId: session.id },
-        select: { userId: true },
-      });
-      const covered = new Set(existing.map((row) => row.userId));
-
-      const absentRows = activeUsers
-        .filter((user) => !covered.has(user.id))
-        .map((user) => ({
-          userId: user.id,
-          sessionId: session.id,
-          status: "ABSENT",
-        }));
-
-      if (absentRows.length > 0) {
-        // skipDuplicates: a check-in racing this transaction wins on the
-        // (userId, sessionId) unique constraint instead of failing the batch.
-        const created = await tx.attendance.createMany({
-          data: absentRows,
-          skipDuplicates: true,
-        });
-        absentCreated = created.count;
-      }
+      // Set-based absence insert: one INSERT ... SELECT that the database
+      // evaluates entirely server-side. The previous version pulled every
+      // active user id into the Node heap (findMany with no filter or take),
+      // diffed it against the session's rows in JS, then createMany'd the
+      // remainder - at tens of thousands of attendants that meant a huge array
+      // in memory and a giant multi-row insert, inside an open write
+      // transaction that would blow the interactive-transaction timeout and
+      // silently stop marking absences.
+      //
+      // - deletedAt IS NULL mirrors the Prisma soft-delete scope the old
+      //   findMany relied on (raw SQL bypasses the extension, so it is spelled
+      //   out here).
+      // - NOT EXISTS skips users who already have any row for this session
+      //   (a real check-in, or an absence from a raced sweep).
+      // - ON CONFLICT DO NOTHING is the race guard the old skipDuplicates gave
+      //   us: a check-in landing between the NOT EXISTS and the insert loses on
+      //   the (userId, sessionId) unique index instead of failing the batch.
+      // - updatedAt has no DB default (@updatedAt is applied by Prisma at the
+      //   app layer, which a raw insert bypasses), so both timestamps are set.
+      absentCreated = await tx.$executeRaw`
+        INSERT INTO "Attendance" ("userId", "sessionId", "status", "createdAt", "updatedAt")
+        SELECT u."id", ${session.id}, 'ABSENT'::"AttendanceStatus", NOW(), NOW()
+        FROM "User" u
+        WHERE u."deletedAt" IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM "Attendance" a
+            WHERE a."sessionId" = ${session.id} AND a."userId" = u."id"
+          )
+        ON CONFLICT ("userId", "sessionId") DO NOTHING
+      `;
 
       const closed = await tx.attendance.updateMany({
         where: {
@@ -102,6 +107,13 @@ export async function finalizeSession(session, { markAbsences, now = new Date() 
     );
 
     return { sessionId: session.id, absentCreated, autoCheckedOut };
+  }, {
+    // The absence insert is one set-based statement, but on an event with tens
+    // of thousands of attendants it still writes tens of thousands of rows, so
+    // the default 5s interactive-transaction timeout is raised. maxWait covers
+    // waiting for a connection when several sessions finalize back to back.
+    timeout: 30_000,
+    maxWait: 10_000,
   });
 }
 
