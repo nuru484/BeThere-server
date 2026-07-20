@@ -65,6 +65,11 @@ export default defineConfig({
       SMTP_SECURE: "false",
       GMAIL_USER: "test@test.local",
       GMAIL_PASSWORD: "test",
+      // A fixed 32-byte key so template encryption works in tests. Liveness
+      // ML is disabled so the suite never loads the face models.
+      FACE_TEMPLATE_ENC_KEY:
+        "0000000000000000000000000000000000000000000000000000000000000000",
+      LIVENESS_ENABLED: "false",
     },
   },
 });
