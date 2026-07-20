@@ -26,7 +26,8 @@ const handleAddFaceScan = asyncHandler(async (req, res, _next) => {
     { consent: req.body.consent, ip: req.ip }
   );
 
-  // The descriptor is never echoed back - only the enrollment status.
+  // The descriptor is never echoed back - only the refreshed safe user
+  // (with hasFaceScan true) so the client can update its session.
   res.status(HTTP_STATUS_CODES.OK).json({
     message: "Face scan added successfully.",
     data: result,

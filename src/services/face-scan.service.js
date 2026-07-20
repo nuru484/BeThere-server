@@ -17,6 +17,7 @@ import { encryptTemplate } from "../utils/biometric-crypto.js";
 import { isFaceDescriptor } from "../utils/face-match.js";
 import { BIOMETRIC_CONSENT_VERSION } from "../config/constants.js";
 import { recordAudit } from "./audit.service.js";
+import { KIND_USER, toSafeUser } from "./auth.service.js";
 
 const hasEnrollment = (user) => Boolean(user.faceScanEnc || user.faceScan);
 
@@ -47,7 +48,7 @@ export async function addFaceScan(userId, faceScan, { consent, ip } = {}) {
     );
   }
 
-  await prisma.user.update({
+  const updated = await prisma.user.update({
     where: { id: userId },
     data: {
       faceScanEnc: encryptTemplate(faceScan),
@@ -68,9 +69,10 @@ export async function addFaceScan(userId, faceScan, { consent, ip } = {}) {
     ip,
   });
 
-  // The descriptor never leaves the server; the client only needs to know it
-  // is enrolled.
-  return { hasFaceScan: true };
+  // Return the refreshed safe user (hasFaceScan now true) so the client can
+  // update its cached session and stop offering enrollment. The descriptor
+  // itself is collapsed to the boolean by toSafeUser and never leaves.
+  return { user: toSafeUser(KIND_USER, updated) };
 }
 
 /** Owner-or-admin enrollment status; 404 when nothing is enrolled. */
