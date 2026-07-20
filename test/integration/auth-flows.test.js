@@ -67,6 +67,38 @@ describe("2FA login", () => {
     expect(step2.headers["set-cookie"].join(";")).toMatch(/bethere_refreshToken=/);
   });
 
+  it("still issues the pending cookie when the resend cooldown is hit", async () => {
+    await createAttendant({
+      email: "tfa3@test.local",
+      phone: "+233540000012",
+      twoFactorEnabled: true,
+    });
+
+    const login = () =>
+      request(app)
+        .post("/api/v1/auth/login")
+        .send({ email: "tfa3@test.local", password: "Password123!" });
+
+    const first = await login();
+    const code = lastCode();
+    // A refresh within the minute must not 429 away the pending cookie - the
+    // user is holding a valid code and needs something to submit it with.
+    const second = await login();
+
+    expect(second.status).toBe(200);
+    expect(second.body.data.twoFactorRequired).toBe(true);
+    expect(second.headers["set-cookie"].join(";")).toMatch(/twoFaPending=/);
+    // No second code was sent; the outstanding one still works.
+    expect(lastCode()).toBe(code);
+    expect(first.status).toBe(200);
+
+    const done = await request(app)
+      .post("/api/v1/auth/login/2fa")
+      .set("Cookie", cookiesFromResponse(second))
+      .send({ code });
+    expect(done.status).toBe(200);
+  });
+
   it("rejects a wrong 2FA code and counts the attempt", async () => {
     await createAttendant({
       email: "tfa2@test.local",
@@ -145,6 +177,48 @@ describe("passwordless OTP login (attendants, phone-first)", () => {
     expect(res.status).toBe(200);
     expect(sent.sms).toHaveLength(0);
     expect(sent.mail).toHaveLength(0);
+  });
+
+  it("answers identically for a known and an unknown identifier, twice over", async () => {
+    await createAttendant({
+      email: "known@test.local",
+      phone: "+233540000030",
+    });
+
+    const probe = (identifier) =>
+      request(app).post("/api/v1/auth/otp/request").send({ identifier });
+
+    // Two probes: the second used to hit the 60s resend cooldown for a real
+    // account (429) while an unknown one stayed at 200 - an existence oracle.
+    const known = [await probe("known@test.local"), await probe("known@test.local")];
+    const unknown = [await probe("ghost@test.local"), await probe("ghost@test.local")];
+
+    for (const res of [...known, ...unknown]) {
+      expect(res.status).toBe(200);
+    }
+    expect(known.map((r) => r.body)).toEqual(unknown.map((r) => r.body));
+  });
+
+  it("derives the channel from the identifier, not from the account", async () => {
+    // The account HAS a phone, but the email was typed: answering "SMS" here
+    // (the account's phone-first channel) would prove the account exists.
+    await createAttendant({
+      email: "hasphone@test.local",
+      phone: "+233540000031",
+    });
+
+    const real = await request(app)
+      .post("/api/v1/auth/otp/request")
+      .send({ identifier: "hasphone@test.local" });
+    const fake = await request(app)
+      .post("/api/v1/auth/otp/request")
+      .send({ identifier: "noaccount@test.local" });
+
+    expect(real.body.data.channel).toBe("EMAIL");
+    expect(real.body.data.channel).toBe(fake.body.data.channel);
+    // The code really did go out on the channel that was reported.
+    expect(sent.mail).toHaveLength(1);
+    expect(sent.sms).toHaveLength(0);
   });
 
   it("a code cannot be used twice", async () => {

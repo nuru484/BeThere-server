@@ -23,8 +23,20 @@ const generateCode = () => crypto.randomInt(100000, 1000000).toString();
  * Issues a fresh code for (kind, principal, purpose), invalidating any
  * outstanding one, and delivers it phone-first: SMS when the principal has a
  * phone, email otherwise.
+ *
+ * `channel` pins the delivery channel instead of deriving it from the account
+ * (the OTP-login flow answers on the channel the identifier was typed in).
+ * `tolerateCooldown` turns the resend cooldown into a no-op that reports the
+ * outstanding code's channel rather than a 429 - for callers where a 429 would
+ * either abort a half-finished login or leak that the account exists.
  */
-export async function issueOtp({ kind, principal, purpose }) {
+export async function issueOtp({
+  kind,
+  principal,
+  purpose,
+  channel: requestedChannel,
+  tolerateCooldown = false,
+}) {
   const recent = await prisma.otpCode.findFirst({
     where: {
       kind,
@@ -35,6 +47,10 @@ export async function issueOtp({ kind, principal, purpose }) {
     },
   });
   if (recent) {
+    if (tolerateCooldown) {
+      // The outstanding code is still valid; the caller continues with it.
+      return { channel: recent.channel, reused: true };
+    }
     throw new TooManyRequestsError(
       "A code was just sent. Please wait a minute before requesting another."
     );
@@ -46,7 +62,11 @@ export async function issueOtp({ kind, principal, purpose }) {
   });
 
   const code = generateCode();
-  const channel = principal.phone ? "SMS" : "EMAIL";
+  // A pinned SMS channel still needs a phone to send to; fall back to email.
+  const wantsSms = requestedChannel
+    ? requestedChannel === "SMS"
+    : Boolean(principal.phone);
+  const channel = wantsSms && principal.phone ? "SMS" : "EMAIL";
 
   await prisma.otpCode.create({
     data: {
@@ -78,7 +98,7 @@ export async function issueOtp({ kind, principal, purpose }) {
     }
   }
 
-  return { channel };
+  return { channel, reused: false };
 }
 
 /**

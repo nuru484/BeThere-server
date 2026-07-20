@@ -135,6 +135,9 @@ export const otpVerify = [
 /** 2FA management for the signed-in principal: send a code first. */
 export const twoFactorChallenge = asyncHandler(async (req, res, _next) => {
   const principal = await findPrincipal(req.user.kind, req.user.id);
+  if (!principal) {
+    throw new UnauthorizedError("Your session is no longer valid.");
+  }
   const { channel } = await issueOtpForPrincipal(
     req.user.kind,
     principal,

@@ -94,7 +94,9 @@ describe("PUT /api/v1/admins/:adminId", () => {
       .set("Cookie", [adminCookie(admin)])
       .send({ firstName: "Hijacked" });
 
-    expect(res.status).toBe(401);
+    // 403, not 401: the actor is authenticated, just not allowed. A 401 would
+    // make cookie clients treat it as an expired session and log them out.
+    expect(res.status).toBe(403);
   });
 
   it("answers 409 when the new email belongs to an attendant", async () => {
@@ -139,7 +141,7 @@ describe("PATCH /api/v1/admins/:adminId/profile-picture", () => {
         contentType: "image/png",
       });
 
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(403);
     expect(uploadImageMock).not.toHaveBeenCalled();
   });
 

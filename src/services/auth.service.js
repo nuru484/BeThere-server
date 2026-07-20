@@ -140,10 +140,15 @@ export async function loginWithPassword(email, password) {
   const { kind, principal } = resolved;
 
   if (principal.twoFactorEnabled) {
+    // tolerateCooldown: the pending token is minted AFTER the code goes out, so
+    // a 429 here (tab refresh, retry within the minute) would leave the user
+    // holding a valid code with no pending cookie to submit it with. Reusing
+    // the outstanding code keeps that login completable.
     const { channel } = await issueOtp({
       kind,
       principal,
       purpose: "TWO_FACTOR",
+      tolerateCooldown: true,
     });
     const pendingToken = jwt.sign(
       { id: principal.id, kind, purpose: "2FA_PENDING" },
@@ -198,23 +203,31 @@ export async function verifyTwoFactorLogin(pendingToken, code) {
  * otherwise. Enumeration-safe: unknown identifiers get the same response.
  */
 export async function requestOtpLogin(identifier) {
+  // Enumeration-safe: the channel is derived from the identifier's FORMAT, and
+  // the code is delivered on that same channel, so a known and an unknown
+  // identifier produce byte-identical responses. Deriving it from the account
+  // instead (phone ? SMS : EMAIL) would answer "SMS" to a typed email address
+  // and thereby prove the account exists.
+  const looksLikePhone = /^\+?\d[\d\s-]{5,}$/.test(identifier ?? "");
+  const channel = looksLikePhone ? "SMS" : "EMAIL";
+
   const user = await prisma.user.findFirst({
     where: { OR: [{ phone: identifier }, { email: identifier }] },
   });
 
-  // Enumeration-safe: an unknown identifier gets the SAME shape as a known one,
-  // including a plausible channel inferred from its format, so the response
-  // body can't be used as an existence oracle. Nothing is actually sent.
-  if (!user) {
-    const looksLikePhone = /^\+?\d[\d\s-]{5,}$/.test(identifier ?? "");
-    return { channel: looksLikePhone ? "SMS" : "EMAIL" };
+  if (user) {
+    // tolerateCooldown: a 429 for a real account against a 200 for an unknown
+    // one is the same oracle by another route - two probes would separate them.
+    // Inside the window the outstanding code simply stands.
+    await issueOtp({
+      kind: KIND_USER,
+      principal: user,
+      purpose: "LOGIN",
+      channel,
+      tolerateCooldown: true,
+    });
   }
 
-  const { channel } = await issueOtp({
-    kind: KIND_USER,
-    principal: user,
-    purpose: "LOGIN",
-  });
   return { channel };
 }
 
