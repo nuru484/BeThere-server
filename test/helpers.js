@@ -5,6 +5,7 @@ import jwt from "jsonwebtoken";
 import ENV from "../src/config/env.js";
 import { prisma } from "../src/config/prisma-client.js";
 import { issueSession } from "../src/services/auth.service.js";
+import { COOKIE_NAMES } from "../src/utils/cookie-manager.js";
 import { upcomingCodes } from "../src/services/venue-code.service.js";
 
 /** The current valid rotating venue code for a known secret (test helper). */
@@ -65,7 +66,7 @@ export function accessCookieFor(kind, principal) {
     ENV.ACCESS_TOKEN_SECRET,
     { expiresIn: "30m" }
   );
-  return `accessToken=${token}`;
+  return `${COOKIE_NAMES.access}=${token}`;
 }
 
 export const adminCookie = (admin) => accessCookieFor("ADMIN", admin);
@@ -77,8 +78,11 @@ export async function sessionFor(kind, principal) {
   return {
     accessToken,
     refreshToken,
-    cookies: [`accessToken=${accessToken}`, `refreshToken=${refreshToken}`],
-    refreshCookie: `refreshToken=${refreshToken}`,
+    cookies: [
+      `${COOKIE_NAMES.access}=${accessToken}`,
+      `${COOKIE_NAMES.refresh}=${refreshToken}`,
+    ],
+    refreshCookie: `${COOKIE_NAMES.refresh}=${refreshToken}`,
   };
 }
 

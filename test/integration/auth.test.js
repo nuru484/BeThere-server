@@ -35,8 +35,8 @@ describe("POST /api/v1/auth/login (cookie-only)", () => {
     expect(res.body.data.user.faceScan).toBeUndefined();
 
     const setCookies = res.headers["set-cookie"].join(";");
-    expect(setCookies).toMatch(/accessToken=/);
-    expect(setCookies).toMatch(/refreshToken=/);
+    expect(setCookies).toMatch(/bethere_accessToken=/);
+    expect(setCookies).toMatch(/bethere_refreshToken=/);
     expect(setCookies).toMatch(/HttpOnly/);
   });
 
@@ -77,12 +77,12 @@ describe("POST /api/v1/refreshToken (cookie rotation)", () => {
 
     expect(res.status).toBe(200);
     const fresh = cookiesFromResponse(res);
-    expect(fresh.join(";")).toMatch(/accessToken=/);
+    expect(fresh.join(";")).toMatch(/bethere_accessToken=/);
 
     // The successor cookie works; the original is consumed.
     const second = await request(app)
       .post("/api/v1/refreshToken")
-      .set("Cookie", fresh.filter((c) => c.startsWith("refreshToken=")));
+      .set("Cookie", fresh.filter((c) => c.startsWith("bethere_refreshToken=")));
     expect(second.status).toBe(200);
 
     const replay = await request(app)
@@ -110,12 +110,12 @@ describe("POST /api/v1/refreshToken (cookie rotation)", () => {
     // Successor refresh dead, and the live access token dead too.
     const successor = await request(app)
       .post("/api/v1/refreshToken")
-      .set("Cookie", firstCookies.filter((c) => c.startsWith("refreshToken=")));
+      .set("Cookie", firstCookies.filter((c) => c.startsWith("bethere_refreshToken=")));
     expect(successor.status).toBe(401);
 
     const access = await request(app)
       .get(`/api/v1/users/${user.id}`)
-      .set("Cookie", firstCookies.filter((c) => c.startsWith("accessToken=")));
+      .set("Cookie", firstCookies.filter((c) => c.startsWith("bethere_accessToken=")));
     expect(access.status).toBe(401);
   });
 
@@ -144,7 +144,7 @@ describe("POST /api/v1/auth/logout", () => {
       .post("/api/v1/auth/logout")
       .set("Cookie", session.cookies);
     expect(out.status).toBe(200);
-    expect(out.headers["set-cookie"].join(";")).toMatch(/accessToken=;/);
+    expect(out.headers["set-cookie"].join(";")).toMatch(/bethere_accessToken=;/);
 
     const res = await request(app)
       .post("/api/v1/refreshToken")

@@ -52,7 +52,7 @@ describe("2FA login", () => {
     expect(step1.body.data.channel).toBe("SMS"); // phone-first
     expect(step1.headers["set-cookie"].join(";")).toMatch(/twoFaPending=/);
     // No auth cookies yet.
-    expect(step1.headers["set-cookie"].join(";")).not.toMatch(/refreshToken=/);
+    expect(step1.headers["set-cookie"].join(";")).not.toMatch(/bethere_refreshToken=/);
 
     const code = lastCode();
     expect(code).toBeTruthy();
@@ -64,7 +64,7 @@ describe("2FA login", () => {
 
     expect(step2.status).toBe(200);
     expect(step2.body.data.user.email).toBe("tfa@test.local");
-    expect(step2.headers["set-cookie"].join(";")).toMatch(/refreshToken=/);
+    expect(step2.headers["set-cookie"].join(";")).toMatch(/bethere_refreshToken=/);
   });
 
   it("rejects a wrong 2FA code and counts the attempt", async () => {
@@ -134,7 +134,7 @@ describe("passwordless OTP login (attendants, phone-first)", () => {
 
     expect(verify.status).toBe(200);
     expect(verify.body.data.user.phoneVerified).toBe(true);
-    expect(verify.headers["set-cookie"].join(";")).toMatch(/refreshToken=/);
+    expect(verify.headers["set-cookie"].join(";")).toMatch(/bethere_refreshToken=/);
   });
 
   it("is enumeration-safe for unknown identifiers", async () => {
