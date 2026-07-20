@@ -103,6 +103,17 @@ export async function consumeChallenge({ token, userId, eventId, mode = "in" }) 
     select: { actions: true },
   });
 
+  // The retention sweep deletes consumed rows, so it can remove this one in
+  // the instant between the consume above and this read. Dereferencing a null
+  // row would 500 an otherwise legitimate check-in; treat it as a spent
+  // challenge so the client restarts the scan cleanly.
+  if (!row) {
+    throw new UnauthorizedError(
+      "This check-in challenge is no longer available. Please start the scan again.",
+      { code: "CHALLENGE_CONSUMED" }
+    );
+  }
+
   return { actions: row.actions };
 }
 

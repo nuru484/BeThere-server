@@ -9,6 +9,115 @@ import { euclideanDistance } from "../../utils/face-match.js";
 import { LIVENESS } from "../../config/constants.js";
 
 /**
+ * Two frames whose descriptors are identical to within floating-point noise are
+ * the SAME IMAGE submitted twice. Distinct photographs of the same person never
+ * land this close, so the threshold is deliberately tiny: it catches re-sent
+ * stills without ever rejecting a genuine burst.
+ */
+const IDENTICAL_FRAME_DISTANCE = 1e-6;
+
+function hasDuplicateFrames(frames) {
+  let withTwin = 0;
+
+  for (let i = 0; i < frames.length; i++) {
+    for (let j = 0; j < frames.length; j++) {
+      if (i === j) continue;
+      const distance = euclideanDistance(
+        frames[i].descriptor,
+        frames[j].descriptor
+      );
+      if (distance <= IDENTICAL_FRAME_DISTANCE) {
+        withTwin++;
+        break;
+      }
+    }
+  }
+
+  // Only a MAJORITY of repeated images is called replay. A camera that stalls
+  // and emits one duplicate frame must not fail an otherwise genuine capture.
+  return withTwin > frames.length / 2;
+}
+
+const isTurn = (action) => action === "TURN_LEFT" || action === "TURN_RIGHT";
+
+/**
+ * Walks the burst in capture order and proves each action strictly after the
+ * previous one. Returns the actions that could not be proven in sequence.
+ *
+ * A blink is a TRANSITION, not a state, so it needs a closed frame followed by
+ * an open one. Turn direction is still not bound to the LEFT/RIGHT label
+ * (front cameras mirror inconsistently), but a second turn must go the opposite
+ * way from the first, which no single still can fake.
+ */
+function proveActionsInOrder(frames, actions) {
+  const failed = [];
+  let cursor = 0;
+  let firstTurnSign = 0;
+
+  for (const action of actions) {
+    if (action === "BLINK") {
+      let closedAt = -1;
+      for (let i = cursor; i < frames.length; i++) {
+        if (frames[i].ear < LIVENESS.EYE_CLOSED_EAR) {
+          closedAt = i;
+          break;
+        }
+      }
+      let openedAt = -1;
+      for (let i = closedAt + 1; closedAt !== -1 && i < frames.length; i++) {
+        if (frames[i].ear > LIVENESS.EYE_CLOSED_EAR * 1.5) {
+          openedAt = i;
+          break;
+        }
+      }
+      if (openedAt === -1) {
+        failed.push("BLINK");
+      } else {
+        // Advance past the CLOSURE (the distinctive event), not the recovery:
+        // the frame where the eyes reopen can legitimately be the same frame
+        // the next action starts in (reopening and smiling can coincide when
+        // prompts run back to back). Order is still enforced.
+        cursor = closedAt + 1;
+      }
+      continue;
+    }
+
+    if (action === "SMILE") {
+      let at = -1;
+      for (let i = cursor; i < frames.length; i++) {
+        if (frames[i].happy >= LIVENESS.SMILE_PROBABILITY) {
+          at = i;
+          break;
+        }
+      }
+      if (at === -1) failed.push("SMILE");
+      else cursor = at + 1;
+      continue;
+    }
+
+    if (isTurn(action)) {
+      let at = -1;
+      for (let i = cursor; i < frames.length; i++) {
+        const yaw = frames[i].yaw;
+        if (Math.abs(yaw) < LIVENESS.YAW_TURN_DEGREES) continue;
+        // A second turn only counts if it reverses the first one.
+        if (firstTurnSign !== 0 && Math.sign(yaw) === firstTurnSign) continue;
+        at = i;
+        break;
+      }
+      if (at === -1) {
+        failed.push(action);
+      } else {
+        if (firstTurnSign === 0) firstTurnSign = Math.sign(frames[at].yaw);
+        cursor = at + 1;
+      }
+    }
+  }
+
+  return failed;
+}
+
+/**
  * @param {Array<{descriptor:number[],yaw:number,ear:number,happy:number,score:number}>} frames
  * @param {number[]} enrolled - the enrolled 128-float descriptor
  * @param {string[]} actions - the challenge action codes to prove
@@ -49,45 +158,21 @@ export function evaluateLiveness(frames, enrolled, actions, matchThreshold) {
     reasons.push("identity_discontinuity");
   }
 
-  // --- Active liveness: prove each requested action from the frames. ---
-  const yaws = frames.map((f) => f.yaw);
-  const ears = frames.map((f) => f.ear);
-  const happies = frames.map((f) => f.happy);
-
-  const turnFrames = yaws.filter((y) => Math.abs(y) >= LIVENESS.YAW_TURN_DEGREES);
-  const turnsRequested = actions.filter(
-    (a) => a === "TURN_LEFT" || a === "TURN_RIGHT"
-  ).length;
-
-  for (const action of actions) {
-    if (action === "BLINK") {
-      const closed = Math.min(...ears) < LIVENESS.EYE_CLOSED_EAR;
-      const opened = Math.max(...ears) > LIVENESS.EYE_CLOSED_EAR * 1.5;
-      if (!(closed && opened)) failedActions.push("BLINK");
-    } else if (action === "SMILE") {
-      if (Math.max(...happies) < LIVENESS.SMILE_PROBABILITY) {
-        failedActions.push("SMILE");
-      }
-    }
-    // TURN_LEFT/TURN_RIGHT are handled together below (sign is not bound to the
-    // label because front cameras mirror inconsistently).
-  }
-
-  if (turnsRequested >= 2) {
-    // Two turns must go opposite ways: proves genuine head movement.
-    const hasPositive = turnFrames.some((y) => y > 0);
-    const hasNegative = turnFrames.some((y) => y < 0);
-    if (!(hasPositive && hasNegative)) {
-      failedActions.push("TURN_LEFT", "TURN_RIGHT");
-    }
-  } else if (turnsRequested === 1) {
-    if (turnFrames.length === 0) {
-      const label = actions.find((a) => a === "TURN_LEFT" || a === "TURN_RIGHT");
-      failedActions.push(label);
-    }
-  }
+  // --- Active liveness: prove each requested action IN ORDER. ---
+  //
+  // Frames arrive in capture order and the client prompts the actions one at a
+  // time, so action N must be proven in a frame strictly after action N-1 was
+  // proven. Checking the burst as an unordered set (any frame with a closed
+  // eye, any frame smiling, ...) meant a fixed handful of stills satisfied
+  // EVERY possible challenge draw, which made the randomized challenge
+  // decorative. Requiring the sequence is what gives the randomization teeth.
+  failedActions.push(...proveActionsInOrder(frames, actions));
 
   if (failedActions.length > 0) reasons.push("action_not_satisfied");
+
+  // Re-submitted stills betray themselves: a live burst never contains two
+  // essentially identical frames (same face, same pose, same expression).
+  if (hasDuplicateFrames(frames)) reasons.push("duplicate_frames");
 
   const passed = reasons.length === 0;
 
