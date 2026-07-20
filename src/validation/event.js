@@ -1,5 +1,35 @@
 import { body } from "express-validator";
 
+// Event create/update accept BOTH plain JSON and multipart/form-data (the
+// latter for the coverImage file). Under multipart every body value arrives
+// as a string, so:
+//   - location is JSON-ENCODED under multipart: clients send the same object
+//     serialized with JSON.stringify. The sanitizer below parses the string
+//     form back to an object before the object/nested validators run; JSON
+//     clients pass through untouched.
+//   - the scalar coercions already in place (.toDate/.toBoolean/.toInt after
+//     isISO8601/isBoolean/isInt) validate on the stringified value, so
+//     "true" and "3" coerce identically for both content types.
+const parseJsonObject = (value) => {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    // Leave the unparsable string in place: isObject() then reports it.
+    return value;
+  }
+};
+
+// coverImage travels as a FILE part; the body field exists only to carry the
+// remove signal ('') on update. Any other string is rejected so clients can
+// never write arbitrary URLs into the column.
+const coverImageRemovalRule = body("coverImage")
+  .optional()
+  .custom((value) => value === "")
+  .withMessage(
+    "coverImage accepts only an empty string (remove). Send a file to replace it."
+  );
+
 export const createEventValidation = [
   body("title")
     .exists({ checkFalsy: true })
@@ -26,7 +56,7 @@ export const createEventValidation = [
     .toDate(),
 
   body("endDate")
-    .optional()
+    .optional({ values: "falsy" })
     .isISO8601()
     .withMessage("End date must be a valid date in ISO format.")
     .toDate(),
@@ -54,13 +84,13 @@ export const createEventValidation = [
     .toBoolean(),
 
   body("recurrenceInterval")
-    .optional()
+    .optional({ values: "falsy" })
     .isInt({ min: 1 })
     .withMessage("Recurrence interval must be a positive integer.")
     .toInt(),
 
   body("durationDays")
-    .optional()
+    .optional({ values: "falsy" })
     .isInt({ min: 1 })
     .withMessage("Duration days must be a positive integer.")
     .toInt(),
@@ -76,6 +106,7 @@ export const createEventValidation = [
   body("location")
     .exists({ checkFalsy: true })
     .withMessage("Event location is required.")
+    .customSanitizer(parseJsonObject)
     .isObject()
     .withMessage("Location must be a JSON object."),
 
@@ -87,18 +118,6 @@ export const createEventValidation = [
     .trim()
     .isLength({ max: 255 })
     .withMessage("Location name must not exceed 255 characters."),
-
-  body("location.latitude")
-    .exists({ checkFalsy: true })
-    .withMessage("Location latitude is required.")
-    .isFloat({ min: -90, max: 90 })
-    .withMessage("Latitude must be a valid number between -90 and 90."),
-
-  body("location.longitude")
-    .exists({ checkFalsy: true })
-    .withMessage("Location longitude is required.")
-    .isFloat({ min: -180, max: 180 })
-    .withMessage("Longitude must be a valid number between -180 and 180."),
 
   body("location.city")
     .optional()
@@ -141,7 +160,7 @@ export const updateEventValidation = [
     .toDate(),
 
   body("endDate")
-    .optional()
+    .optional({ values: "falsy" })
     .isISO8601()
     .withMessage("End date must be a valid ISO date.")
     .toDate(),
@@ -167,13 +186,13 @@ export const updateEventValidation = [
     .toBoolean(),
 
   body("recurrenceInterval")
-    .optional()
+    .optional({ values: "falsy" })
     .isInt({ min: 1 })
     .withMessage("recurrenceInterval must be a positive integer.")
     .toInt(),
 
   body("durationDays")
-    .optional()
+    .optional({ values: "falsy" })
     .isInt({ min: 1 })
     .withMessage("durationDays must be a positive integer.")
     .toInt(),
@@ -185,8 +204,11 @@ export const updateEventValidation = [
     .trim()
     .escape(),
 
+  coverImageRemovalRule,
+
   body("location")
     .optional()
+    .customSanitizer(parseJsonObject)
     .isObject()
     .withMessage("Location must be a JSON object."),
 
@@ -198,20 +220,6 @@ export const updateEventValidation = [
     .trim()
     .isLength({ max: 255 })
     .withMessage("Location name must not exceed 255 characters."),
-
-  body("location.latitude")
-    .if(body("location").exists())
-    .exists({ checkFalsy: true })
-    .withMessage("Latitude is required when location is provided.")
-    .isFloat({ min: -90, max: 90 })
-    .withMessage("Latitude must be between -90 and 90."),
-
-  body("location.longitude")
-    .if(body("location").exists())
-    .exists({ checkFalsy: true })
-    .withMessage("Longitude is required when location is provided.")
-    .isFloat({ min: -180, max: 180 })
-    .withMessage("Longitude must be between -180 and 180."),
 
   body("location.city")
     .optional()

@@ -15,6 +15,12 @@ import {
 import { parsePagination, paginationMeta } from "../utils/pagination.js";
 import * as eventService from "../services/event.service.js";
 import * as eventQueryService from "../services/event-query.service.js";
+import {
+  ensureVenueSecret,
+  upcomingCodes,
+} from "../services/venue-code.service.js";
+import { VENUE_CODE } from "../config/constants.js";
+import { NotFoundError } from "../middleware/error-handler.js";
 
 const parseEventId = (eventId) => {
   if (!eventId || isNaN(parseInt(eventId))) {
@@ -23,8 +29,28 @@ const parseEventId = (eventId) => {
   return parseInt(eventId);
 };
 
+// Admin venue display: a batch of upcoming rotating codes the display renders
+// as a QR and cycles through locally (so it never polls the server every 30s).
+// The venue secret itself is never returned.
+export const getVenueCodes = asyncHandler(async (req, res, _next) => {
+  const eventId = parseEventId(req.params.eventId);
+  const secret = await ensureVenueSecret(eventId);
+  if (!secret) {
+    throw new NotFoundError(`Event with ID ${eventId} not found.`);
+  }
+
+  res.status(HTTP_STATUS_CODES.OK).json({
+    message: "Venue codes issued.",
+    data: {
+      eventId,
+      periodMs: VENUE_CODE.PERIOD_MS,
+      codes: upcomingCodes(secret),
+    },
+  });
+});
+
 const handleCreateEvent = asyncHandler(async (req, res, _next) => {
-  const data = await eventService.createEvent(req.body);
+  const data = await eventService.createEvent(req.body, req.file);
 
   res.status(HTTP_STATUS_CODES.CREATED).json({
     message: "Event created successfully",
@@ -40,7 +66,7 @@ export const createEvent = [
 const handleUpdateEvent = asyncHandler(async (req, res, _next) => {
   const eventId = parseEventId(req.params.eventId);
 
-  const data = await eventService.updateEvent(eventId, req.body);
+  const data = await eventService.updateEvent(eventId, req.body, req.file);
 
   res.status(HTTP_STATUS_CODES.OK).json({
     message: "Event updated successfully",

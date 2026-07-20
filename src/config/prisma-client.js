@@ -10,6 +10,15 @@ const adapter = new PrismaPg({ connectionString });
 // Reads on soft-deletable models (User, Event) are auto-scoped to
 // non-deleted rows by the extension; `findUnique` is the deliberate
 // "find deleted on purpose" seam.
-const prisma = new PrismaClient({ adapter }).$extends(softDeleteExtension);
+//
+// Global omit: the event venue secret (which mints the rotating presence
+// codes) is stripped from EVERY query result - including events nested inside
+// attendance/dashboard responses - so it can never leak to a client. The few
+// server-side call sites that genuinely need it override with an explicit
+// `select: { venueSecret: true }`.
+const prisma = new PrismaClient({
+  adapter,
+  omit: { event: { venueSecret: true } },
+}).$extends(softDeleteExtension);
 
 export { prisma };

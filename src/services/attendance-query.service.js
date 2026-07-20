@@ -104,6 +104,21 @@ export function buildAttendanceWhere({
   return whereClause;
 }
 
+/**
+ * Admins are not attendants (separate principal), so "my attendance" for an
+ * admin's own id has no User row and no records. That is an empty result,
+ * not a missing resource - callers use this to skip the 404.
+ */
+function isAdminViewingSelf(actor, targetUserId) {
+  return (
+    actor?.role === "ADMIN" &&
+    actor?.kind === "ADMIN" &&
+    parseInt(actor?.id?.toString() || "0") === targetUserId
+  );
+}
+
+const EMPTY_ATTENDANCE_PAGE = Object.freeze({ attendances: [], total: 0 });
+
 async function findAttendancePage(whereClause, { skip, limit }) {
   const [attendances, total] = await Promise.all([
     prisma.attendance.findMany({
@@ -136,6 +151,9 @@ export async function listUserAttendance(
   const user = await prisma.user.findFirst({ where: { id: userId } });
 
   if (!user) {
+    if (isAdminViewingSelf(actor, userId)) {
+      return EMPTY_ATTENDANCE_PAGE;
+    }
     throw new NotFoundError(`User with ID ${userId} not found.`);
   }
 
@@ -203,15 +221,29 @@ export async function listEventAttendance(
     endDate,
   });
 
-  // Search across user details
+  // One search box covers attendant details AND, when the term is a plain
+  // number, the session id - so the separate session filter is optional.
   if (search) {
-    whereClause.user = {
-      OR: [
-        { firstName: { contains: search, mode: "insensitive" } },
-        { lastName: { contains: search, mode: "insensitive" } },
-        { email: { contains: search, mode: "insensitive" } },
-      ],
+    const userMatch = {
+      user: {
+        OR: [
+          { firstName: { contains: search, mode: "insensitive" } },
+          { lastName: { contains: search, mode: "insensitive" } },
+          { email: { contains: search, mode: "insensitive" } },
+        ],
+      },
     };
+
+    const numericSearch = /^\d+$/.test(search.trim())
+      ? parseInt(search.trim(), 10)
+      : null;
+
+    whereClause.AND = [
+      ...(whereClause.AND ?? []),
+      numericSearch !== null
+        ? { OR: [userMatch, { sessionId: numericSearch }] }
+        : userMatch,
+    ];
   }
 
   return findAttendancePage(whereClause, { skip, limit });
@@ -232,7 +264,7 @@ export async function listUserEventAttendance(
 
   const user = await prisma.user.findFirst({ where: { id: userId } });
 
-  if (!user) {
+  if (!user && !isAdminViewingSelf(actor, userId)) {
     throw new NotFoundError(`User with ID ${userId} not found.`);
   }
 
@@ -240,6 +272,11 @@ export async function listUserEventAttendance(
 
   if (!event) {
     throw new NotFoundError(`Event with ID ${eventId} not found.`);
+  }
+
+  if (!user) {
+    // Admin viewing their own (nonexistent) attendance for a real event.
+    return EMPTY_ATTENDANCE_PAGE;
   }
 
   const whereClause = buildAttendanceWhere({

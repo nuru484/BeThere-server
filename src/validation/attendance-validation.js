@@ -1,44 +1,31 @@
 import { body } from "express-validator";
 
-export const createAttendanceValidation = [
-  body("latitude")
-    .exists({ checkFalsy: true })
-    .withMessage("Latitude is required.")
-    .isFloat({ min: -90, max: 90 })
-    .withMessage("Latitude must be a number between -90 and 90.")
-    .toFloat(),
+const challengeTokenRule = body("challengeToken")
+  .exists({ checkFalsy: true })
+  .withMessage("A liveness challenge token is required.")
+  .isString()
+  .withMessage("Invalid challenge token.");
 
-  body("longitude")
+// Step 1 (both directions): the fail-fast preflight that issues a liveness
+// challenge. Presence is proven by the scanned rotating venue code; the geofence
+// is gone. `mode` selects check-in vs check-out.
+export const createChallengeValidation = [
+  body("venueCode")
     .exists({ checkFalsy: true })
-    .withMessage("Longitude is required.")
-    .isFloat({ min: -180, max: 180 })
-    .withMessage("Longitude must be a number between -180 and 180.")
-    .toFloat(),
-
-  // The captured face-api descriptor: verification runs server-side against
-  // the enrolled descriptor, so check-in cannot be faked by skipping the
-  // camera flow.
-  body("faceDescriptor")
-    .exists()
-    .withMessage("Face descriptor is required.")
-    .isArray({ min: 128, max: 128 })
-    .withMessage("Face descriptor must be an array of 128 numbers."),
-  body("faceDescriptor.*")
-    .isFloat()
-    .withMessage("Face descriptor must contain only numbers.")
-    .toFloat(),
+    .withMessage("Please scan the venue code shown at the event location.")
+    .isString()
+    .withMessage("Invalid venue code."),
+  body("mode")
+    .optional()
+    .isIn(["in", "out"])
+    .withMessage("mode must be 'in' or 'out'."),
 ];
 
-export const updateAttendanceValidation = [
-  body("latitude")
-    .optional()
-    .isFloat({ min: -90, max: 90 })
-    .withMessage("Latitude must be a number between -90 and 90.")
-    .toFloat(),
+// Step 2: check-in. Frames arrive as multipart files (validated in the
+// controller); verification is entirely server-side, so there is no
+// client-computed descriptor.
+export const createAttendanceValidation = [challengeTokenRule];
 
-  body("longitude")
-    .optional()
-    .isFloat({ min: -180, max: 180 })
-    .withMessage("Longitude must be a number between -180 and 180.")
-    .toFloat(),
-];
+// Step 2: check-out. Same shape as check-in - it also uploads frames and runs
+// server-side liveness now.
+export const updateAttendanceValidation = [challengeTokenRule];

@@ -6,7 +6,6 @@ datasource db {
   provider = "postgresql"
 }
 
-
 // Staff principal, separate from attendants: different lifecycle, no
 // attendance or biometrics. Ids overlap with User ids, so tokens and
 // security rows always carry a `kind` alongside the id.
@@ -21,7 +20,7 @@ model Admin {
 
   twoFactorEnabled Boolean @default(false)
 
-  tokenVersion Int @default(0)
+  tokenVersion Int       @default(0)
   deletedAt    DateTime?
 
   createdAt DateTime @default(now())
@@ -51,17 +50,35 @@ model OtpCode {
 }
 
 model User {
-  id             Int     @id @default(autoincrement())
-  firstName      String  @db.VarChar(255)
-  lastName       String  @db.VarChar(255)
-  password       String
-  email          String  @unique
-  profilePicture String? @db.VarChar(255)
-  phone          String? @unique
-  faceScan       Json?
+  id                      Int       @id @default(autoincrement())
+  firstName               String    @db.VarChar(255)
+  lastName                String    @db.VarChar(255)
+  // Nullable: admin-created attendants start passwordless and sign in via
+  // OTP; a password only exists if the user sets one (e.g. via reset flow).
+  password                String?
+  email                   String    @unique
+  profilePicture          String?   @db.VarChar(255)
+  phone                   String?   @unique
+  // Legacy plaintext descriptor. Superseded by faceScanEnc (encrypted at
+  // rest); kept nullable during the expand/backfill window and read only as a
+  // fallback. A later migration drops it once every row is encrypted.
+  faceScan                Json?
+  // The enrolled 128-float template, AES-256-GCM encrypted (base64 iv:tag:ct).
+  // Biometric data is decrypted in memory only at match time and never leaves
+  // the server.
+  faceScanEnc             String?
+  // Biometric consent (GDPR Art. 9 / BIPA): enrollment is refused without it.
+  // The version lets a policy change force re-consent.
+  biometricConsentAt      DateTime?
+  biometricConsentVersion String?
+  // Last time the template verified a check-in; drives retention purge of
+  // dormant biometrics.
+  faceLastUsedAt          DateTime?
 
   twoFactorEnabled Boolean @default(false)
-  /** Set once the phone has received and confirmed an OTP. */
+  /**
+   * Set once the phone has received and confirmed an OTP.
+   */
   phoneVerified    Boolean @default(false)
 
   // Session epoch: bumped on refresh-token theft detection or forced logout,
@@ -127,6 +144,12 @@ model Event {
   startTime          String // When attendance opens (e.g., "06:00")
   endTime            String // When attendance closes (e.g., "19:30")
   archived           Boolean   @default(false) // Archive status
+  coverImage         String?   @db.VarChar(255) // Cloudinary secure URL
+  // Per-event secret for the rotating venue code (proof of on-site presence).
+  // The 30s codes shown on the venue display are keyed HMACs of this secret +
+  // the time window; the secret itself never leaves the server. Nullable so
+  // pre-existing events lazily gain one on first use.
+  venueSecret        String?
 
   // Soft delete: removed events disappear from lists but their sessions and
   // attendance history stay queryable for reports.
@@ -170,8 +193,6 @@ model Session {
 model Location {
   id        Int     @id @default(autoincrement())
   name      String
-  latitude  Float
-  longitude Float
   city      String?
   country   String?
   events    Event[]
@@ -207,4 +228,101 @@ model Attendance {
   // relation is joined constantly - both were unindexed.
   @@index([checkInTime])
   @@index([sessionId])
+}
+
+// A server-issued liveness challenge for one check-in attempt. The randomized
+// action sequence is the anti-replay mechanism: a pre-recorded capture cannot
+// satisfy actions the client learned only after the server picked them. The
+// signed token the client returns carries the nonce; exchanging it consumes
+// this row (atomic updateMany, like the refresh/OTP flows).
+model LivenessChallenge {
+  id         Int       @id @default(autoincrement())
+  userId     Int
+  eventId    Int
+  nonce      String    @unique
+  // Ordered action codes, e.g. ["TURN_LEFT", "BLINK", "SMILE"].
+  actions    Json
+  expiresAt  DateTime
+  consumedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, eventId])
+  @@index([expiresAt])
+}
+
+enum AnomalyType {
+  IMPOSSIBLE_TRAVEL
+  GEO_IP_MISMATCH
+  DUPLICATE_DESCRIPTOR
+  LIVENESS_FAILED
+  REPLAY_SUSPECTED
+  RAPID_ATTEMPTS
+}
+
+enum AnomalySeverity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+// Detective control (not preventive): a reviewable signal that a check-in
+// attempt looked wrong. Recorded whether or not the attempt was allowed, so a
+// manager has an audit trail. FK-less (references either principal table by
+// kind, like the security rows above).
+model AnomalyFlag {
+  id         Int             @id @default(autoincrement())
+  userId     Int
+  eventId    Int?
+  type       AnomalyType
+  severity   AnomalySeverity @default(MEDIUM)
+  detail     Json?
+  // The evidence, if any frames were retained for this flag.
+  evidenceId Int?
+  resolvedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([type])
+  @@index([createdAt])
+  @@index([resolvedAt])
+}
+
+// Captured frames retained ONLY for a flagged/anomalous attempt (data
+// minimization). Stored on Cloudinary; expiresAt drives the retention purge.
+model AttendanceEvidence {
+  id            Int      @id @default(autoincrement())
+  userId        Int
+  eventId       Int
+  attendanceId  Int?
+  frameUrls     Json
+  livenessScore Float?
+  matchDistance Float?
+  reason        String?
+  expiresAt     DateTime
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// Immutable-by-convention audit trail for check-ins and admin actions. FK-less
+// polymorphic actor (kind + id), no updatedAt (append-only).
+model AuditLog {
+  id         Int     @id @default(autoincrement())
+  actorKind  String // "ADMIN" | "USER" | "SYSTEM"
+  actorId    Int?
+  action     String
+  targetType String?
+  targetId   Int?
+  metadata   Json?
+  ip         String?
+
+  createdAt DateTime @default(now())
+
+  @@index([actorKind, actorId])
+  @@index([action])
+  @@index([createdAt])
 }

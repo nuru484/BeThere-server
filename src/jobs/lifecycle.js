@@ -11,12 +11,12 @@ let running = null;
 export async function startWorkers() {
   if (running) return running;
 
-  const [{ sessionWorker }, scheduler, { tokenCleanupQueue }, resetService, bullmq, redis] =
+  const [{ sessionWorker }, scheduler, { tokenCleanupQueue }, retentionService, bullmq, redis] =
     await Promise.all([
       import("./session-worker.js"),
       import("./session-scheduler.js"),
       import("./token-cleanup.js"),
-      import("../services/password-reset.service.js"),
+      import("../services/retention.service.js"),
       import("bullmq"),
       import("../config/redis-connection.js"),
     ]);
@@ -53,8 +53,7 @@ export async function startWorkers() {
   const tokenCleanupWorker = new Worker(
     "tokenCleanup",
     async () => {
-      const count = await resetService.cleanupExpiredResetTokens();
-      logger.info(`🧹 Cleaned up ${count} expired password reset token(s)`);
+      await retentionService.runRetention();
     },
     { connection: createRedisConnection() }
   );

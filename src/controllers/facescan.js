@@ -20,17 +20,16 @@ const parseUserId = (userId) => {
 
 const handleAddFaceScan = asyncHandler(async (req, res, _next) => {
   assertAttendant(req.user, "Only attendants can enroll a face scan.");
-  const updatedUser = await faceScanService.addFaceScan(
+  const result = await faceScanService.addFaceScan(
     parseInt(req.user.id),
-    req.body.faceScan
+    req.body.faceScan,
+    { consent: req.body.consent, ip: req.ip }
   );
 
+  // The descriptor is never echoed back - only the enrollment status.
   res.status(HTTP_STATUS_CODES.OK).json({
     message: "Face scan added successfully.",
-    data: {
-      faceScan: updatedUser.faceScan,
-      user: updatedUser,
-    },
+    data: result,
   });
 });
 
@@ -53,7 +52,10 @@ export const getUserFaceScan = asyncHandler(async (req, res, _next) => {
 export const deleteUserFaceScan = asyncHandler(async (req, res, _next) => {
   const targetUserId = parseUserId(req.params.userId);
 
-  await faceScanService.deleteFaceScan(targetUserId);
+  await faceScanService.deleteFaceScan(targetUserId, {
+    actor: req.user,
+    ip: req.ip,
+  });
 
   res.status(HTTP_STATUS_CODES.OK).json({
     message: "Face scan deleted successfully.",

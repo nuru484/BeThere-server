@@ -4,6 +4,7 @@
 // rules, session (re)scheduling through the BullMQ queue, and soft
 // deletion. Scheduling failures never fail the request - they are logged
 // and the session worker's sweep picks the event up later.
+import crypto from "node:crypto";
 import { startOfDay, addDays } from "date-fns";
 import { prisma } from "../config/prisma-client.js";
 import {
@@ -11,6 +12,11 @@ import {
   ValidationError,
 } from "../middleware/error-handler.js";
 import { sessionQueue } from "../jobs/session-queue.js";
+import {
+  deleteImage,
+  imageColumnValue,
+  uploadImage,
+} from "../utils/cloudinary.js";
 import logger from "../utils/logger.js";
 
 /** Inclusive day count between two dates (both endpoints counted). */
@@ -39,7 +45,7 @@ async function queueSessionCreation(eventId, eventStartDate, messages) {
 }
 
 /** Creates the event (with nested location) and schedules its first session. */
-export async function createEvent(input) {
+export async function createEvent(input, file) {
   const {
     location,
     startDate,
@@ -48,7 +54,16 @@ export async function createEvent(input) {
     endTime,
     isRecurring,
     durationDays,
-    ...eventDetails
+    // Whitelisted editable columns only - anything else in the body (archived,
+    // deletedAt, venueSecret, timestamps, ...) is dropped, so a client can't
+    // mass-assign its way past domain guards.
+    title,
+    description,
+    recurrenceInterval,
+    type,
+    // The cover image only ever arrives as a FILE part; a client-typed body
+    // value is dropped so nobody can write arbitrary URLs into the column.
+    coverImage: _ignoredCoverImage,
   } = input;
 
   if (!isRecurring && !endDate) {
@@ -61,8 +76,15 @@ export async function createEvent(input) {
     calculatedDuration = inclusiveDurationDays(startDate, endDate);
   }
 
+  const coverImage = file ? await uploadImage(file.buffer) : undefined;
+
   const eventData = {
-    ...eventDetails,
+    title,
+    ...(description !== undefined && { description }),
+    type,
+    ...(recurrenceInterval !== undefined && { recurrenceInterval }),
+    ...(coverImage !== undefined && { coverImage }),
+    venueSecret: crypto.randomBytes(32).toString("hex"),
     startDate: new Date(startDate),
     endDate: endDate ? new Date(endDate) : null,
     startTime,
@@ -72,8 +94,6 @@ export async function createEvent(input) {
     location: {
       create: {
         name: location.name,
-        latitude: parseFloat(location.latitude),
-        longitude: parseFloat(location.longitude),
         city: location.city || null,
         country: location.country || null,
       },
@@ -96,7 +116,7 @@ export async function createEvent(input) {
       immediate: `📅 Queued immediate session creation for event ${event.id}`,
     });
   } catch (error) {
-    logger.info(error, `❌ Failed to schedule session for event ${event.id}:`);
+    logger.error(error, `Failed to schedule session for event ${event.id}`);
   }
 
   return event;
@@ -108,7 +128,7 @@ export async function createEvent(input) {
  * passed one-off events unless converting them to recurring), then
  * reconciles session scheduling with the new shape.
  */
-export async function updateEvent(eventId, input) {
+export async function updateEvent(eventId, input, file) {
   const {
     location,
     startDate,
@@ -117,7 +137,12 @@ export async function updateEvent(eventId, input) {
     endTime,
     isRecurring,
     durationDays,
-    ...eventUpdateData
+    coverImage,
+    // Whitelisted editable columns only (see createEvent) - no mass assignment.
+    title,
+    description,
+    recurrenceInterval,
+    type,
   } = input;
 
   // findFirst: a soft-deleted event reads as absent.
@@ -194,8 +219,19 @@ export async function updateEvent(eventId, input) {
     calculatedDuration = inclusiveDurationDays(newStartDate, newEndDate);
   }
 
+  // Cover image wire semantics (see utils/cloudinary.js imageColumnValue):
+  // a file part replaces, body coverImage '' removes, absence leaves the
+  // column untouched. undefined below means "no change".
+  const newCoverImage = file
+    ? await uploadImage(file.buffer)
+    : imageColumnValue(coverImage);
+
   const updateData = {
-    ...eventUpdateData,
+    ...(title !== undefined && { title }),
+    ...(description !== undefined && { description }),
+    ...(type !== undefined && { type }),
+    ...(recurrenceInterval !== undefined && { recurrenceInterval }),
+    ...(newCoverImage !== undefined && { coverImage: newCoverImage }),
     ...(startDate && { startDate: new Date(startDate) }),
     ...(endDate !== undefined && {
       endDate: endDate ? new Date(endDate) : null,
@@ -210,8 +246,6 @@ export async function updateEvent(eventId, input) {
     updateData.location = {
       update: {
         name: location.name,
-        latitude: parseFloat(location.latitude),
-        longitude: parseFloat(location.longitude),
         city: location.city || null,
         country: location.country || null,
       },
@@ -229,6 +263,12 @@ export async function updateEvent(eventId, input) {
       },
     },
   });
+
+  // The replaced/removed asset is deleted only after the row change stuck;
+  // deleteImage is best-effort and never fails the request.
+  if (newCoverImage !== undefined && existingEvent.coverImage) {
+    await deleteImage(existingEvent.coverImage);
+  }
 
   await reconcileSessionSchedule(existingEvent, updatedEvent, {
     startDate,

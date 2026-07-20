@@ -80,12 +80,43 @@ const ENV = {
   CLOUDINARY_API_SECRET: envRequired("CLOUDINARY_API_SECRET"),
   CLOUDINARY_CLOUD_NAME: envRequired("CLOUDINARY_CLOUD_NAME"),
 
+  /**
+   * One-click demo login (portfolio). When true, POST /auth/demo-login signs
+   * into a seeded demo account for the requested role WITHOUT any credentials
+   * in the client bundle. Off by default so a real deployment never exposes it
+   * unintentionally.
+   */
+  DEMO_LOGIN_ENABLED: envBool("DEMO_LOGIN_ENABLED"),
+  /** Email of the seeded demo ADMIN (defaults to the seeded primary admin). */
+  DEMO_ADMIN_EMAIL: envOptional("DEMO_ADMIN_EMAIL") ?? envRequired("ADMIN_EMAIL"),
+  /** Email of the seeded demo ATTENDANT. */
+  DEMO_ATTENDANT_EMAIL:
+    envOptional("DEMO_ATTENDANT_EMAIL") ?? "john.doe@example.com",
+
   /** Cookie scope for the auth cookies (unset = current host only). */
   COOKIE_DOMAIN: envOptional("COOKIE_DOMAIN"),
   CORS_ACCESS: envOptional("CORS_ACCESS"),
   /** The venue timezone the "HH:MM" event windows are written in. */
   EVENT_TIMEZONE: envOptional("EVENT_TIMEZONE") ?? "Africa/Accra",
   DATABASE_URL: envRequired("DATABASE_URL"),
+
+  /**
+   * 32-byte key (hex or base64) that encrypts enrolled face templates at
+   * rest (AES-256-GCM). Required: biometric data must never sit in the DB in
+   * plaintext. Generate with `openssl rand -hex 32`. Rotating it invalidates
+   * existing templates (users re-enroll), so treat it like a signing secret.
+   */
+  FACE_TEMPLATE_ENC_KEY: envRequired("FACE_TEMPLATE_ENC_KEY"),
+  /**
+   * Server-side liveness verification switch. On by default; tests and local
+   * flows without the ML models set it false to skip the heavy face engine.
+   */
+  LIVENESS_ENABLED: envBool("LIVENESS_ENABLED", true),
+  /** Directory holding the face-api model weights (see README setup). */
+  FACE_MODELS_PATH: envOptional("FACE_MODELS_PATH") ?? "./models",
+  /** Euclidean match threshold for the enrolled vs captured descriptor. */
+  FACE_MATCH_THRESHOLD: envNumber("FACE_MATCH_THRESHOLD", 0.6),
+
   FRONTEND_URL: envRequired("FRONTEND_URL"),
 
   /** Frog (Wigal) SMS credentials - all three unset means log-only SMS. */

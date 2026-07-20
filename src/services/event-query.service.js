@@ -26,11 +26,15 @@ export async function listEvents({ skip, limit, search, type, location }) {
   const whereClause = {};
 
   if (search) {
+    // One search box covers everything a user might type: title,
+    // description, type, and the full location (name/city/country).
     whereClause.OR = [
       { title: { contains: search, mode: "insensitive" } },
       { description: { contains: search, mode: "insensitive" } },
       { type: { contains: search, mode: "insensitive" } },
+      { location: { name: { contains: search, mode: "insensitive" } } },
       { location: { city: { contains: search, mode: "insensitive" } } },
+      { location: { country: { contains: search, mode: "insensitive" } } },
     ];
   }
 

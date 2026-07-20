@@ -130,36 +130,26 @@ async function main() {
   const locationData = [
     {
       name: "Accra International Conference Centre",
-      latitude: 5.556818,
-      longitude: -0.196477,
       city: "Accra",
       country: "Ghana",
     },
     {
       name: "University of Ghana, Legon",
-      latitude: 5.651358,
-      longitude: -0.186964,
       city: "Accra",
       country: "Ghana",
     },
     {
       name: "Kumasi Cultural Centre",
-      latitude: 6.687904,
-      longitude: -1.624027,
       city: "Kumasi",
       country: "Ghana",
     },
     {
       name: "Cape Coast Castle",
-      latitude: 5.10579,
-      longitude: -1.24681,
       city: "Cape Coast",
       country: "Ghana",
     },
     {
       name: "Tamale Sports Stadium",
-      latitude: 9.40045,
-      longitude: -0.83918,
       city: "Tamale",
       country: "Ghana",
     },

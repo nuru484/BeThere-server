@@ -10,12 +10,14 @@ import { HTTP_STATUS_CODES } from "../config/constants.js";
 import { validationMiddleware } from "../validation/validation-error-handler.js";
 import {
   createAttendanceValidation,
+  createChallengeValidation,
   updateAttendanceValidation,
 } from "../validation/attendance-validation.js";
 import { parsePagination, paginationMeta } from "../utils/pagination.js";
 import * as attendanceService from "../services/attendance.service.js";
 import { assertAttendant } from "../utils/authorization.js";
 import * as attendanceQueryService from "../services/attendance-query.service.js";
+import { LIVENESS } from "../config/constants.js";
 
 const parseId = (value, message) => {
   if (!value || isNaN(parseInt(value))) {
@@ -24,15 +26,51 @@ const parseId = (value, message) => {
   return parseInt(value);
 };
 
+// Step 1: preflight (venue code + enrollment + window) + issue a randomized
+// liveness challenge, for either check-in (mode "in") or check-out ("out").
+const handleCreateChallenge = asyncHandler(async (req, res, _next) => {
+  assertAttendant(req.user, "Only attendants can mark attendance.");
+  const eventId = parseId(req.params.eventId, "Valid event ID is required.");
+  const { venueCode, mode } = req.body;
+
+  const challenge = await attendanceService.prepareAttendanceChallenge(
+    parseInt(req.user.id),
+    eventId,
+    { venueCode, mode: mode === "out" ? "out" : "in" }
+  );
+
+  res.status(HTTP_STATUS_CODES.OK).json({
+    message: "Liveness challenge issued. Follow the on-screen actions.",
+    data: challenge,
+  });
+});
+
+export const createAttendanceChallenge = [
+  validationMiddleware.create(createChallengeValidation),
+  handleCreateChallenge,
+];
+
+/** Shared frame-count guard for the multipart capture uploads. */
+const framesOrThrow = (req) => {
+  const files = req.files ?? [];
+  if (files.length < LIVENESS.MIN_FRAMES || files.length > LIVENESS.MAX_FRAMES) {
+    throw new ValidationError(
+      `Please capture between ${LIVENESS.MIN_FRAMES} and ${LIVENESS.MAX_FRAMES} frames.`
+    );
+  }
+  return files.map((file) => file.buffer);
+};
+
+// Step 2, check-in: verify the uploaded frames server-side and record attendance.
 const handleCreateAttendance = asyncHandler(async (req, res, _next) => {
   assertAttendant(req.user, "Only attendants can check in.");
   const eventId = parseId(req.params.eventId, "Valid event ID is required.");
-  const { latitude, longitude, faceDescriptor } = req.body;
+  const frameBuffers = framesOrThrow(req);
 
   const attendance = await attendanceService.checkIn(
     parseInt(req.user.id),
     eventId,
-    { latitude, longitude, faceDescriptor }
+    { challengeToken: req.body.challengeToken, frameBuffers, ip: req.ip }
   );
 
   res.status(HTTP_STATUS_CODES.CREATED).json({
@@ -46,15 +84,16 @@ export const createAttendance = [
   handleCreateAttendance,
 ];
 
+// Step 2, check-out: same server-side liveness as check-in, over uploaded frames.
 const handleUpdateAttendance = asyncHandler(async (req, res, _next) => {
   assertAttendant(req.user, "Only attendants can check out.");
   const eventId = parseId(req.params.eventId, "Valid event ID is required.");
-  const { latitude, longitude } = req.body;
+  const frameBuffers = framesOrThrow(req);
 
   const attendance = await attendanceService.checkOut(
     parseInt(req.user.id),
     eventId,
-    { latitude, longitude }
+    { challengeToken: req.body.challengeToken, frameBuffers, ip: req.ip }
   );
 
   res.status(HTTP_STATUS_CODES.OK).json({

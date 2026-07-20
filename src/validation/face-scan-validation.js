@@ -15,4 +15,12 @@ export const faceScanValidation = [
       }
       return true;
     }),
+
+  // Explicit biometric consent is mandatory to enroll (GDPR Art. 9 / BIPA).
+  body("consent")
+    .exists()
+    .withMessage("Biometric consent is required to enroll your face.")
+    .isBoolean()
+    .withMessage("Consent must be true or false.")
+    .toBoolean(),
 ];
