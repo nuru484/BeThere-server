@@ -12,6 +12,7 @@ import faceScanRoutes from "./facescan.js";
 import dashboardRoutes from "./dashboard/index.js";
 import passwordResetRoutes from "./password-reset.js";
 import reportsRouter from "./attendance-reports.js";
+import detectiveRoutes from "./detective.js";
 
 routes.use("/auth", authRoutes);
 routes.use("/events", eventRoutes);
@@ -23,5 +24,6 @@ routes.use("/facescan", faceScanRoutes);
 routes.use("/dashboard", dashboardRoutes);
 routes.use("/password-reset", passwordResetRoutes);
 routes.use("/attendance-reports", reportsRouter);
+routes.use("/review", detectiveRoutes);
 
 export default routes;

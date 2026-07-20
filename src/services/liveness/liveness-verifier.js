@@ -49,7 +49,16 @@ const disabledVerifier = {
   },
 };
 
+// Test-only override so the liveness FAILURE branch (evidence + anomaly +
+// audit writes) can be exercised without real ML. Honored only under
+// NODE_ENV=test so it can never affect a real deployment.
+let testOverride = null;
+export function setLivenessVerifierForTest(verifier) {
+  testOverride = verifier;
+}
+
 /** Selects the active verifier from configuration. */
 export function getLivenessVerifier() {
+  if (testOverride && ENV.NODE_ENV === "test") return testOverride;
   return ENV.LIVENESS_ENABLED ? faceApiVerifier : disabledVerifier;
 }
