@@ -7,6 +7,53 @@ import logger from "../utils/logger.js";
 import { NotFoundError } from "../middleware/error-handler.js";
 import { sessionQueue } from "./session-queue.js";
 
+/**
+ * Plans the Session rows for ONE occurrence of an event: one row PER DAY.
+ *
+ * A single row spanning several days used to be created for a multi-day event,
+ * but Attendance is unique on (userId, sessionId) - so that one row meant one
+ * check-in for the ENTIRE span, and a Mon-Fri conference could only ever
+ * record a single day per attendee. A day per row makes attendance per day,
+ * which is what a "session" means everywhere else in the product.
+ *
+ * Pure on purpose: the date arithmetic is the part worth testing, and it needs
+ * neither Redis nor a database.
+ */
+export function planOccurrenceSessions({
+  eventId,
+  occurrenceStart,
+  durationDays,
+  startTime,
+  endTime,
+  eventEndDate = null,
+}) {
+  const [startHour, startMinute] = startTime.split(":").map(Number);
+  const [endHour, endMinute] = endTime.split(":").map(Number);
+  const lastAllowedDay = eventEndDate ? startOfDay(new Date(eventEndDate)) : null;
+
+  const rows = [];
+  for (let offset = 0; offset < Math.max(1, durationDays || 1); offset++) {
+    const day = addDays(occurrenceStart, offset);
+    // Never run an occurrence past the event's own end date.
+    if (lastAllowedDay && day > lastAllowedDay) break;
+
+    const dayStart = new Date(day);
+    dayStart.setHours(startHour, startMinute, 0, 0);
+    const dayEnd = new Date(day);
+    dayEnd.setHours(endHour, endMinute, 0, 0);
+
+    rows.push({
+      eventId,
+      startDate: day,
+      endDate: day,
+      startTime: dayStart,
+      endTime: dayEnd,
+    });
+  }
+
+  return rows;
+}
+
 export const sessionWorker = new Worker(
   "sessionQueue",
   async (job) => {
@@ -35,26 +82,20 @@ export const sessionWorker = new Worker(
       // First session - use event's startDate
       sessionStartDate = startOfDay(new Date(event.startDate));
     } else {
-      // Recurring event - calculate next occurrence
+      // Recurring event - calculate the next occurrence. Sessions are stored
+      // one per day, so the newest row is the LAST day of the previous
+      // occurrence; step back to that occurrence's first day before adding the
+      // interval, or a multi-day event would drift by durationDays - 1 each time.
       const lastSession = event.sessions[0];
-      sessionStartDate = addDays(
+      const lastOccurrenceStart = addDays(
         new Date(lastSession.startDate),
+        -(Math.max(1, event.durationDays || 1) - 1)
+      );
+      sessionStartDate = addDays(
+        lastOccurrenceStart,
         event.recurrenceInterval
       );
     }
-
-    // Calculate session end date based on durationDays
-    const sessionEndDate = addDays(sessionStartDate, event.durationDays - 1);
-
-    // Parse time strings and create full DateTime objects
-    const [startHour, startMinute] = event.startTime.split(":").map(Number);
-    const [endHour, endMinute] = event.endTime.split(":").map(Number);
-
-    const startTime = new Date(sessionStartDate);
-    startTime.setHours(startHour, startMinute, 0, 0);
-
-    const endTime = new Date(sessionEndDate);
-    endTime.setHours(endHour, endMinute, 0, 0);
 
     // Check if session already exists
     const existingSession = await prisma.session.findUnique({
@@ -83,27 +124,28 @@ export const sessionWorker = new Worker(
       return { status: "completed", reason: "Event ended" };
     }
 
-    // Create the session
-    const newSession = await prisma.session.create({
-      data: {
-        eventId: event.id,
-        startDate: sessionStartDate,
-        endDate: sessionEndDate,
-        startTime: startTime,
-        endTime: endTime,
-      },
+    // One row per day of this occurrence, so attendance is recorded per day.
+    const plannedSessions = planOccurrenceSessions({
+      eventId: event.id,
+      occurrenceStart: sessionStartDate,
+      durationDays: event.durationDays,
+      startTime: event.startTime,
+      endTime: event.endTime,
+      eventEndDate: event.endDate,
     });
 
-    logger.info(`✅ Created session ${newSession.id} for event ${eventId}`);
+    // skipDuplicates keeps the job idempotent if it is retried part-way.
+    const { count } = await prisma.session.createMany({
+      data: plannedSessions,
+      skipDuplicates: true,
+    });
 
+    const lastPlanned = plannedSessions[plannedSessions.length - 1];
     logger.info(
-      `   Start: ${format(sessionStartDate, "yyyy-MM-dd")} at ${
-        event.startTime
-      }`
-    );
-
-    logger.info(
-      `   End: ${format(sessionEndDate, "yyyy-MM-dd")} at ${event.endTime}`
+      `✅ Created ${count} session(s) for event ${eventId}: ` +
+        `${format(sessionStartDate, "yyyy-MM-dd")} -> ` +
+        `${format(lastPlanned.startDate, "yyyy-MM-dd")} ` +
+        `(${event.startTime}-${event.endTime})`
     );
 
     // If recurring, schedule the next session creation
@@ -135,9 +177,9 @@ export const sessionWorker = new Worker(
 
     return {
       status: "success",
-      sessionId: newSession.id,
+      sessionsCreated: count,
       startDate: sessionStartDate,
-      endDate: sessionEndDate,
+      endDate: lastPlanned.startDate,
     };
   },
   {
