@@ -122,6 +122,7 @@ export const errorHandler = (error, req, res, _next) => {
   // Logging details
   const logDetails = {
     errorId,
+    requestId: req.requestId,
     message: processedError.message,
     path: req.path,
     method: req.method,
@@ -160,6 +161,9 @@ export const errorHandler = (error, req, res, _next) => {
       isProduction && status === 500
         ? "Internal Server Error"
         : processedError.message || "Internal Server Error",
+    // Always returned so a user can quote it for support; it maps to the
+    // access log and the error log for this exact request.
+    requestId: req.requestId,
   };
 
   if (context && code === "VALIDATION_ERROR") {

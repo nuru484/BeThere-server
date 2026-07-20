@@ -3,8 +3,8 @@ import { asyncHandler, ValidationError } from "../middleware/error-handler.js";
 import { HTTP_STATUS_CODES } from "../config/constants.js";
 import { validationMiddleware } from "../validation/validation-error-handler.js";
 import {
-  addUserValidation,
-  changePasswordValidation,
+  adminChangePasswordValidation,
+  createAdminValidation,
   updateUserProfileValidation,
 } from "../validation/users-validation.js";
 import { parsePagination, paginationMeta } from "../utils/pagination.js";
@@ -26,7 +26,7 @@ const handleCreateAdmin = asyncHandler(async (req, res, _next) => {
 });
 
 export const createAdmin = [
-  validationMiddleware.create(addUserValidation),
+  validationMiddleware.create(createAdminValidation),
   handleCreateAdmin,
 ];
 
@@ -111,6 +111,6 @@ const handleChangeAdminPassword = asyncHandler(async (req, res, _next) => {
 });
 
 export const changeAdminPassword = [
-  validationMiddleware.create(changePasswordValidation),
+  validationMiddleware.create(adminChangePasswordValidation),
   handleChangeAdminPassword,
 ];

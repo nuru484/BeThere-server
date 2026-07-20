@@ -10,6 +10,7 @@ import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 import routes from "./src/routes/index.js";
+import { requestId } from "./src/middleware/request-id.js";
 import {
   UnauthorizedError,
   errorHandler,
@@ -49,8 +50,10 @@ app.use(cookieParser());
 // any X-Forwarded-For chain, letting clients spoof the IP the rate limiter
 // keys on.
 app.set("trust proxy", 1);
+app.use(requestId);
 if (ENV.NODE_ENV !== "test") {
-  app.use(morgan(":method :url :status :response-time ms"));
+  morgan.token("id", (req) => req.requestId);
+  app.use(morgan(":id :method :url :status :response-time ms"));
 }
 
 // Liveness: process is up. Kept before the API router so platform pollers

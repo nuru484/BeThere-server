@@ -1,4 +1,5 @@
 // prisma/seed.ts
+import crypto from "node:crypto";
 import { AttendanceStatus } from "@prisma/client";
 import { prisma } from "../src/config/prisma-client.js";
 import * as bcrypt from "bcrypt";
@@ -19,6 +20,45 @@ async function main() {
 
   const existingUsers = await prisma.user.count();
   const existingLocations = await prisma.location.count();
+
+  // Dedicated demo principals for the one-click demo login (never the real
+  // admin). Seeded ONLY when demo login is enabled, and ensured idempotently
+  // BEFORE the already-seeded early-return so re-running on an existing
+  // database still guarantees they exist. demo-login resolves them by
+  // DEMO_ADMIN_EMAIL / DEMO_ATTENDANT_EMAIL.
+  //
+  // The demo admin gets a RANDOM password that is regenerated (and rotated on
+  // update) every seed run, so it is never a known credential. The demo-login
+  // endpoint signs the account in by email lookup with no password check, so
+  // the demo still works; the normal /auth/login path cannot be used to reach
+  // this account because nobody knows the password. This closes the
+  // known-credentials admin backdoor a hardcoded password would create.
+  if (ENV.DEMO_LOGIN_ENABLED) {
+    const demoPassword = await bcrypt.hash(
+      crypto.randomBytes(24).toString("hex"),
+      10,
+    );
+    await prisma.admin.upsert({
+      where: { email: ENV.DEMO_ADMIN_EMAIL },
+      update: { password: demoPassword },
+      create: {
+        email: ENV.DEMO_ADMIN_EMAIL,
+        firstName: "Demo",
+        lastName: "Admin",
+        password: demoPassword,
+      },
+    });
+    await prisma.user.upsert({
+      where: { email: ENV.DEMO_ATTENDANT_EMAIL },
+      update: {},
+      create: {
+        email: ENV.DEMO_ATTENDANT_EMAIL,
+        firstName: "Demo",
+        lastName: "Attendant",
+      },
+    });
+    logger.info("Demo admin + attendant ensured for one-click demo login");
+  }
 
   if (existingUsers > 1 && existingLocations > 0) {
     logger.info("✅ Database already seeded. Skipping seed operation.");
@@ -54,13 +94,8 @@ async function main() {
   });
 
   logger.info({
-    message: "✅ Admin user seeded successfully",
-    admin: {
-      id: admin.id,
-      email: admin.email,
-      firstName: admin.firstName,
-      lastName: admin.lastName,
-    },
+    message: "Admin user seeded successfully",
+    admin: { id: admin.id, email: admin.email },
   });
 
   // ============ SEED REGULAR USERS ============

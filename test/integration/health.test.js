@@ -15,4 +15,21 @@ describe("health endpoints", () => {
     expect(res.status).toBe(200);
     expect(res.body.db).toBe("up");
   });
+
+  it("stamps every response with an X-Request-Id and echoes it in errors", async () => {
+    const res = await request(app).get("/health");
+    expect(res.headers["x-request-id"]).toBeTruthy();
+
+    // An error response carries the same correlation id in the body.
+    const missing = await request(app).get("/api/v1/does-not-exist");
+    expect(missing.status).toBe(404);
+    expect(missing.body.requestId).toBe(missing.headers["x-request-id"]);
+  });
+
+  it("reuses an inbound X-Request-Id", async () => {
+    const res = await request(app)
+      .get("/health")
+      .set("X-Request-Id", "upstream-correlation-123");
+    expect(res.headers["x-request-id"]).toBe("upstream-correlation-123");
+  });
 });

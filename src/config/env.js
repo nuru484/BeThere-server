@@ -87,11 +87,14 @@ const ENV = {
    * unintentionally.
    */
   DEMO_LOGIN_ENABLED: envBool("DEMO_LOGIN_ENABLED"),
-  /** Email of the seeded demo ADMIN (defaults to the seeded primary admin). */
-  DEMO_ADMIN_EMAIL: envOptional("DEMO_ADMIN_EMAIL") ?? envRequired("ADMIN_EMAIL"),
-  /** Email of the seeded demo ATTENDANT. */
+  /**
+   * Email of the seeded DEDICATED demo admin - deliberately NOT the primary
+   * admin, so enabling demo login never hands out the real admin account.
+   */
+  DEMO_ADMIN_EMAIL: envOptional("DEMO_ADMIN_EMAIL") ?? "demo-admin@bethere.app",
+  /** Email of the seeded dedicated demo ATTENDANT. */
   DEMO_ATTENDANT_EMAIL:
-    envOptional("DEMO_ATTENDANT_EMAIL") ?? "john.doe@example.com",
+    envOptional("DEMO_ATTENDANT_EMAIL") ?? "demo-attendant@bethere.app",
 
   /** Cookie scope for the auth cookies (unset = current host only). */
   COOKIE_DOMAIN: envOptional("COOKIE_DOMAIN"),

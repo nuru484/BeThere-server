@@ -9,12 +9,14 @@ import { closeRedisClient } from "./src/lib/redis.js";
 import { flushSentry, initSentry } from "./src/lib/sentry.js";
 import logger from "./src/utils/logger.js";
 
+// Init Sentry BEFORE the workers start so a crash during worker startup is
+// still reported.
+initSentry();
+
 startWorkers().catch((err) => {
   logger.error(err, "Failed to start worker");
   process.exit(1);
 });
-
-initSentry();
 
 let shuttingDown = false;
 
@@ -43,3 +45,12 @@ const shutdown = async (signal) => {
 
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));
+
+process.on("unhandledRejection", (reason) => {
+  logger.error(reason, "Unhandled promise rejection in worker");
+});
+
+process.on("uncaughtException", (error) => {
+  logger.fatal(error, "Uncaught exception in worker");
+  void shutdown("uncaughtException");
+});

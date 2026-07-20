@@ -50,6 +50,9 @@ async function assertAdminPhoneAvailable(phone, excludeAdminId) {
 }
 
 export async function createAdmin({ firstName, lastName, email, password, phone }) {
+  if (!password) {
+    throw new BadRequestError("A password is required to create an admin.");
+  }
   await assertAdminEmailAvailable(email);
 
   const hashedPassword = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
@@ -164,8 +167,9 @@ export async function updateAdminProfilePicture(actor, targetAdminId, file) {
     throw new NotFoundError("Admin not found.");
   }
 
-  await deleteImage(admin.profilePicture);
-
+  // Upload first, then swap the row; clean up the old asset off the response
+  // path (best-effort, swallows its own errors).
+  const oldPicture = admin.profilePicture;
   const secureUrl = await uploadImage(file.buffer);
 
   const updatedAdmin = await prisma.admin.update({
@@ -173,6 +177,8 @@ export async function updateAdminProfilePicture(actor, targetAdminId, file) {
     data: { profilePicture: secureUrl },
     select: ADMIN_SELECT,
   });
+
+  if (oldPicture) void deleteImage(oldPicture);
 
   return toSafeUser("ADMIN", updatedAdmin);
 }
@@ -188,6 +194,15 @@ export async function deleteAdmin(actor, targetAdminId) {
     throw new NotFoundError("Admin not found.");
   }
 
+  // Never delete the last remaining admin - that would lock the org out with
+  // no way back (admin creation is itself an admin-only action).
+  const remainingAdmins = await prisma.admin.count();
+  if (remainingAdmins <= 1) {
+    throw new ForbiddenError(
+      "Cannot delete the last admin. Create another admin first."
+    );
+  }
+
   await prisma.admin.update({
     where: { id: targetAdminId },
     data: { deletedAt: new Date() },
@@ -197,6 +212,11 @@ export async function deleteAdmin(actor, targetAdminId) {
 
 /** Verifies the current password, sets the new one, revokes all sessions. */
 export async function changeAdminPassword(adminId, currentPassword, newPassword) {
+  // Admins always have a password, so a missing current one is a clean 400,
+  // never a bcrypt.compare(undefined) crash.
+  if (!currentPassword) {
+    throw new BadRequestError("Current password is required.");
+  }
   if (currentPassword === newPassword) {
     throw new BadRequestError(
       "New password cannot be the same as current password"
