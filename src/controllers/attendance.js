@@ -70,7 +70,12 @@ const handleCreateAttendance = asyncHandler(async (req, res, _next) => {
   const attendance = await attendanceService.checkIn(
     parseInt(req.user.id),
     eventId,
-    { challengeToken: req.body.challengeToken, frameBuffers, ip: req.ip }
+    {
+      challengeToken: req.body.challengeToken,
+      venueCode: req.body.venueCode,
+      frameBuffers,
+      ip: req.ip,
+    }
   );
 
   res.status(HTTP_STATUS_CODES.CREATED).json({
@@ -93,7 +98,12 @@ const handleUpdateAttendance = asyncHandler(async (req, res, _next) => {
   const attendance = await attendanceService.checkOut(
     parseInt(req.user.id),
     eventId,
-    { challengeToken: req.body.challengeToken, frameBuffers, ip: req.ip }
+    {
+      challengeToken: req.body.challengeToken,
+      venueCode: req.body.venueCode,
+      frameBuffers,
+      ip: req.ip,
+    }
   );
 
   res.status(HTTP_STATUS_CODES.OK).json({

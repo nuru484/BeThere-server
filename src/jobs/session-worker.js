@@ -2,7 +2,8 @@
 import { Worker } from "bullmq";
 import { prisma } from "../config/prisma-client.js";
 import { createRedisConnection } from "../config/redis-connection.js";
-import { addDays, startOfDay, format } from "date-fns";
+import { addDays, format } from "date-fns";
+import { utcDayStart } from "../utils/time-context.js";
 import logger from "../utils/logger.js";
 import { NotFoundError } from "../middleware/error-handler.js";
 import { sessionQueue } from "./session-queue.js";
@@ -29,7 +30,7 @@ export function planOccurrenceSessions({
 }) {
   const [startHour, startMinute] = startTime.split(":").map(Number);
   const [endHour, endMinute] = endTime.split(":").map(Number);
-  const lastAllowedDay = eventEndDate ? startOfDay(new Date(eventEndDate)) : null;
+  const lastAllowedDay = eventEndDate ? utcDayStart(eventEndDate) : null;
 
   const rows = [];
   for (let offset = 0; offset < Math.max(1, durationDays || 1); offset++) {
@@ -80,7 +81,7 @@ export const sessionWorker = new Worker(
 
     if (event.sessions.length === 0) {
       // First session - use event's startDate
-      sessionStartDate = startOfDay(new Date(event.startDate));
+      sessionStartDate = utcDayStart(event.startDate);
     } else {
       // Recurring event - calculate the next occurrence. Sessions are stored
       // one per day, so the newest row is the LAST day of the previous

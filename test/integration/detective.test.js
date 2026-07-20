@@ -170,7 +170,8 @@ describe("failed check-in writes evidence + anomaly + audit", () => {
     const req = request(app)
       .post(`/api/v1/attendance/${event.id}`)
       .set("Cookie", [attendantCookie(user)])
-      .field("challengeToken", challenge.body.data.challengeToken);
+      .field("challengeToken", challenge.body.data.challengeToken)
+      .field("venueCode", venueCodeFor(event.venueSecret));
     for (let i = 0; i < 8; i++) req.attach("frames", FRAME, `f${i}.jpg`);
     const res = await req;
 

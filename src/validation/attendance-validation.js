@@ -1,5 +1,11 @@
 import { body } from "express-validator";
 
+const venueCodeRule = body("venueCode")
+  .exists({ checkFalsy: true })
+  .withMessage("Please scan the venue code shown at the event location.")
+  .isString()
+  .withMessage("Invalid venue code.");
+
 const challengeTokenRule = body("challengeToken")
   .exists({ checkFalsy: true })
   .withMessage("A liveness challenge token is required.")
@@ -10,11 +16,7 @@ const challengeTokenRule = body("challengeToken")
 // challenge. Presence is proven by the scanned rotating venue code; the geofence
 // is gone. `mode` selects check-in vs check-out.
 export const createChallengeValidation = [
-  body("venueCode")
-    .exists({ checkFalsy: true })
-    .withMessage("Please scan the venue code shown at the event location.")
-    .isString()
-    .withMessage("Invalid venue code."),
+  venueCodeRule,
   body("mode")
     .optional()
     .isIn(["in", "out"])
@@ -23,9 +25,11 @@ export const createChallengeValidation = [
 
 // Step 2: check-in. Frames arrive as multipart files (validated in the
 // controller); verification is entirely server-side, so there is no
-// client-computed descriptor.
-export const createAttendanceValidation = [challengeTokenRule];
+// client-computed descriptor. The venue code is re-sent and re-checked here,
+// so presence has to still hold when the frames are uploaded, not only when
+// the challenge was minted.
+export const createAttendanceValidation = [challengeTokenRule, venueCodeRule];
 
-// Step 2: check-out. Same shape as check-in - it also uploads frames and runs
-// server-side liveness now.
-export const updateAttendanceValidation = [challengeTokenRule];
+// Step 2: check-out. Same shape as check-in - it also uploads frames, runs
+// server-side liveness, and re-proves presence.
+export const updateAttendanceValidation = [challengeTokenRule, venueCodeRule];

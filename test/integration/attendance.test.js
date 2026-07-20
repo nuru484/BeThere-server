@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 import request from "supertest";
 import app from "../../app.js";
+import { prisma } from "../../src/config/prisma-client.js";
 import {
   attendantCookie,
   createEventWithActiveSession,
@@ -24,11 +25,19 @@ const requestChallenge = (user, event, { venueCode, mode } = {}) =>
     .set("Cookie", [attendantCookie(user)])
     .send({ venueCode: venueCode ?? venueCodeFor(event.venueSecret), mode });
 
-function submitFrames(method, user, event, { token, frames = 8 } = {}) {
+function submitFrames(
+  method,
+  user,
+  event,
+  { token, frames = 8, venueCode } = {}
+) {
   const agent = request(app);
+  // The venue code is re-checked at upload, so presence must still hold when
+  // the frames arrive - not only when the challenge was minted.
   const req = agent[method](`/api/v1/attendance/${event.id}`)
     .set("Cookie", [attendantCookie(user)])
-    .field("challengeToken", token ?? "");
+    .field("challengeToken", token ?? "")
+    .field("venueCode", venueCode ?? venueCodeFor(event.venueSecret));
   for (let i = 0; i < frames; i++) req.attach("frames", FRAME, `frame-${i}.jpg`);
   return req;
 }
@@ -93,6 +102,24 @@ describe("POST /attendance/:eventId (check-in)", () => {
     });
 
     expect(res.status).toBe(400);
+  });
+
+  it("rejects the upload when the venue code is no longer valid", async () => {
+    const { event } = await createEventWithActiveSession();
+    const user = await enrolled("stalecode@test.local");
+
+    const challenge = await requestChallenge(user, event);
+    expect(challenge.status).toBe(200);
+
+    // Presence proved at the preflight, then the frames uploaded with a code
+    // that is not the venue's current one - i.e. relayed off-site, or stale.
+    const res = await submitFrames("post", user, event, {
+      token: challenge.body.data.challengeToken,
+      venueCode: "ffffffffffffffff",
+    });
+
+    expect(res.status).toBe(400);
+    expect(await prisma.attendance.count({ where: { userId: user.id } })).toBe(0);
   });
 
   it("rejects a missing/invalid challenge token with 401", async () => {

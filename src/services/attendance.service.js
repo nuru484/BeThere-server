@@ -7,7 +7,6 @@
 // The flow is two steps: a fail-fast challenge preflight (code + enrollment +
 // window) issues a single-use, mode-scoped liveness challenge; the client then
 // uploads frames performing the randomized actions.
-import { startOfDay } from "date-fns";
 import { prisma } from "../config/prisma-client.js";
 import {
   BadRequestError,
@@ -17,7 +16,7 @@ import {
 } from "../middleware/error-handler.js";
 import { isFaceDescriptor } from "../utils/face-match.js";
 import { decryptTemplate } from "../utils/biometric-crypto.js";
-import { todayAtEventTime } from "../utils/time-context.js";
+import { eventCalendarDay, todayAtEventTime } from "../utils/time-context.js";
 import { consumeChallenge, issueChallenge } from "./liveness-challenge.service.js";
 import { getLivenessVerifier } from "./liveness/liveness-verifier.js";
 import { storeEvidence } from "./attendance-evidence.service.js";
@@ -63,7 +62,10 @@ async function findEventOrThrow(eventId) {
 
 /** The session whose date range covers `now`, or null when none is active. */
 export async function resolveActiveSession(eventId, now) {
-  const currentDate = startOfDay(now);
+  // The venue's calendar day, not the server's: sessions are date-only rows
+  // and the two disagree whenever the host and the venue are in different
+  // timezones.
+  const currentDate = eventCalendarDay(now);
   return prisma.session.findFirst({
     where: {
       eventId,
@@ -129,7 +131,7 @@ async function assertValidVenueCode(eventId, venueCode) {
  * session and the PRESENT/LATE status. Shared cheap gate before the ML step.
  */
 async function resolveSessionForCheckIn(event, now) {
-  const currentDate = startOfDay(now);
+  const currentDate = eventCalendarDay(now);
   const currentSession = await resolveActiveSession(event.id, now);
 
   if (!currentSession) {
@@ -264,9 +266,20 @@ export async function prepareAttendanceChallenge(
  * the enrolled template, and records PRESENT/LATE. A failed attempt is recorded
  * as evidence + an anomaly, not silently dropped.
  */
-export async function checkIn(userId, eventId, { frameBuffers, challengeToken, ip }) {
+export async function checkIn(
+  userId,
+  eventId,
+  { frameBuffers, challengeToken, venueCode, ip }
+) {
   const user = await findUserOrThrow(userId);
   const enrolled = resolveEnrolledDescriptor(user);
+
+  // Presence is re-proven HERE, not only at the preflight. Checking it once
+  // when the challenge was minted let a code be photographed, relayed
+  // off-site, and the frames uploaded from anywhere for the life of the
+  // challenge. Codes rotate every 30s, so requiring a still-valid one at
+  // upload keeps the proof of presence attached to the proof of liveness.
+  await assertValidVenueCode(eventId, venueCode);
 
   const event = await findEventOrThrow(eventId);
   const now = new Date();
@@ -322,9 +335,16 @@ export async function checkIn(userId, eventId, { frameBuffers, challengeToken, i
  * Step 2, check-out: consumes the check-out challenge, verifies liveness (same
  * as check-in), and stamps the check-out time within the window.
  */
-export async function checkOut(userId, eventId, { frameBuffers, challengeToken, ip }) {
+export async function checkOut(
+  userId,
+  eventId,
+  { frameBuffers, challengeToken, venueCode, ip }
+) {
   const user = await findUserOrThrow(userId);
   const enrolled = resolveEnrolledDescriptor(user);
+
+  // Check-out re-proves presence exactly like check-in.
+  await assertValidVenueCode(eventId, venueCode);
 
   const event = await findEventOrThrow(eventId);
   const now = new Date();

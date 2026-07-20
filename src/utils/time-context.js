@@ -9,6 +9,39 @@
  */
 import ENV from "../config/env.js";
 
+/**
+ * The venue's CALENDAR DAY for `now`, as a UTC-midnight Date.
+ *
+ * Session rows store date-only values, and "which day is it at the venue" has
+ * to be asked the same way everywhere. Deriving it from the SERVER's local
+ * midnight meant a host in UTC and a venue in UTC+12 disagreed about the
+ * current day for half of it, so check-in was refused all morning and then
+ * opened during the previous venue evening.
+ */
+export function eventCalendarDay(now = new Date()) {
+  // en-CA renders as YYYY-MM-DD, which is exactly the date-only key we want.
+  const isoDate = new Intl.DateTimeFormat("en-CA", {
+    timeZone: ENV.EVENT_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+
+  return new Date(`${isoDate}T00:00:00.000Z`);
+}
+
+/**
+ * Normalizes an already date-only value (an event's startDate/endDate) to UTC
+ * midnight WITHOUT re-interpreting it through a timezone, which would shift it
+ * a day for negative offsets.
+ */
+export function utcDayStart(value) {
+  const date = new Date(value);
+  return new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
+  );
+}
+
 /** "HH:MM" for the current moment in the event timezone. */
 export function currentTimeStringInEventTz(now = new Date()) {
   return new Intl.DateTimeFormat("en-GB", {
