@@ -1,30 +1,70 @@
 // src/middleware/rate-limit.js
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator, MemoryStore } from "express-rate-limit";
 import { RedisStore } from "rate-limit-redis";
 import { getRedisClient } from "../lib/redis.js";
+import { flagAnomaly } from "../services/anomaly.service.js";
 import ENV from "../config/env.js";
 
 /**
+ * Limiters are skipped under NODE_ENV=test by default so unrelated suites
+ * never trip them, but the rate-limit tests re-enable them through this
+ * override to exercise the real 429 behavior.
+ */
+let testOverrideEnabled = false;
+export function setRateLimitTestOverride(enabled) {
+  testOverrideEnabled = enabled;
+}
+const skipInTest = () => ENV.NODE_ENV === "test" && !testOverrideEnabled;
+
+/** Memory stores created in test mode, so tests can reset counters. */
+const memoryStores = [];
+export function resetRateLimitCounters() {
+  for (const store of memoryStores) store.resetAll();
+}
+
+/**
  * Counter store shared across instances: Redis when the shared client
- * exists, express-rate-limit's in-memory default otherwise (tests). Each
- * limiter gets its own prefix so windows never collide on one IP.
+ * exists, a tracked in-memory store otherwise (tests). Each limiter gets its
+ * own prefix so windows never collide on one IP.
  */
 const createStore = (prefix) => {
   const client = getRedisClient();
-  if (!client) return undefined;
+  if (!client) {
+    const store = new MemoryStore();
+    memoryStores.push(store);
+    return store;
+  }
   return new RedisStore({
     prefix,
     sendCommand: (command, ...args) => client.call(command, ...args),
   });
 };
 
-// Shared 429 response shape — matches the app's error envelope so the client's
+// Shared 429 response shape - matches the app's error envelope so the client's
 // error extractor reads `message` the same way it does for every other error.
+/**
+ * Keys a limiter on the AUTHENTICATED principal, falling back to IP only when
+ * the request is anonymous. Essential for the attendance and enrollment
+ * surfaces: a whole venue shares one NAT address, so an IP-keyed limiter would
+ * let the first handful of attendees exhaust the window and 429 everybody else
+ * at the event - exactly the people the endpoint exists for. Requires the
+ * limiter to be mounted AFTER authenticateJWT.
+ */
+const perPrincipal = (req) =>
+  req.user ? `${req.user.kind}:${req.user.id}` : ipKeyGenerator(req.ip);
+
 const rateLimitResponse = (message) => ({
   status: "error",
   message,
   code: "RATE_LIMIT_EXCEEDED",
 });
+
+// Credential/cost limiters (login, OTP request/verify, password reset) fail
+// CLOSED (passOnStoreError: false): a Redis outage must not silently disable
+// brute-force protection on the surfaces that guard credentials, even at the
+// price of erroring those endpoints while Redis is down. Availability
+// limiters (attendance, enrollment, refresh, demo) stay fail-open - losing
+// Redis should not take normal usage of the product down with it.
 
 /**
  * Limits how often a client can request a password reset email. Tighter, because
@@ -32,11 +72,12 @@ const rateLimitResponse = (message) => ({
  */
 export const passwordResetRequestLimiter = rateLimit({
   store: createStore("rl:reset-req:"),
-  passOnStoreError: true,
+  passOnStoreError: false,
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: skipInTest,
   message: rateLimitResponse(
     "Too many password reset requests. Please try again in a few minutes."
   ),
@@ -48,11 +89,12 @@ export const passwordResetRequestLimiter = rateLimit({
  */
 export const passwordResetConfirmLimiter = rateLimit({
   store: createStore("rl:reset-confirm:"),
-  passOnStoreError: true,
+  passOnStoreError: false,
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: skipInTest,
   message: rateLimitResponse(
     "Too many attempts. Please try again in a few minutes."
   ),
@@ -65,13 +107,13 @@ export const passwordResetConfirmLimiter = rateLimit({
  */
 export const loginLimiter = rateLimit({
   store: createStore("rl:login:"),
-  passOnStoreError: true,
+  passOnStoreError: false,
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 10,
   skipSuccessfulRequests: true,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: () => ENV.NODE_ENV === "test",
+  skip: skipInTest,
   message: rateLimitResponse(
     "Too many failed login attempts. Please try again in a few minutes."
   ),
@@ -83,12 +125,12 @@ export const loginLimiter = rateLimit({
  */
 export const otpRequestLimiter = rateLimit({
   store: createStore("rl:otp-req:"),
-  passOnStoreError: true,
+  passOnStoreError: false,
   windowMs: 15 * 60 * 1000,
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: () => ENV.NODE_ENV === "test",
+  skip: skipInTest,
   message: rateLimitResponse(
     "Too many code requests. Please try again in a few minutes."
   ),
@@ -103,14 +145,80 @@ export const otpRequestLimiter = rateLimit({
  */
 export const attendanceAttemptLimiter = rateLimit({
   store: createStore("rl:attendance:"),
+  keyGenerator: perPrincipal,
   passOnStoreError: true,
   windowMs: 15 * 60 * 1000,
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: () => ENV.NODE_ENV === "test",
+  skip: skipInTest,
+  // Hitting this wall IS the RAPID_ATTEMPTS anomaly: a genuine attendee
+  // never needs 20 tries in 15 minutes. Flagged best-effort (fire and
+  // forget) for an attendant principal, then the standard 429 envelope.
+  handler: async (req, res) => {
+    if (req.user?.kind === "USER") {
+      // Awaited (flagAnomaly never throws): only the already-throttled 429
+      // path pays the write, and the flag is durably recorded before the
+      // response goes out.
+      await flagAnomaly({
+        userId: Number(req.user.id),
+        type: "RAPID_ATTEMPTS",
+        severity: "MEDIUM",
+        detail: { route: req.originalUrl },
+      });
+    }
+    res
+      .status(429)
+      .json(
+        rateLimitResponse(
+          "Too many check-in attempts. Please wait a few minutes and try again."
+        )
+      );
+  },
+});
+
+/**
+ * Face ENROLLMENT, step 1: minting the liveness challenge. Cheap (a random
+ * challenge plus one row), but not free, so it gets its own bucket with its
+ * own prefix. It must NOT share the enrollment bucket: one attempt is
+ * challenge + submit, so a shared counter charged every attempt two units and
+ * halved the real enrollment budget.
+ */
+export const faceChallengeLimiter = rateLimit({
+  store: createStore("rl:enroll-challenge:"),
+  keyGenerator: perPrincipal,
+  passOnStoreError: true,
+  windowMs: 15 * 60 * 1000,
+  // Deliberately above the submit budget: a client may mint a challenge and
+  // abandon the capture (camera denied, page closed) without spending an
+  // enrollment attempt.
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
   message: rateLimitResponse(
-    "Too many check-in attempts. Please wait a few minutes and try again."
+    "Too many face registration attempts. Please wait a few minutes and try again."
+  ),
+});
+
+/**
+ * Face ENROLLMENT, step 2: the expensive one. POST /facescan runs the face
+ * engine over up to 16 frames - sequential WASM inference on the request
+ * thread - so an unlimited endpoint lets one authenticated user pin the event
+ * loop. Enrollment is a once-per-account action, so 10 real attempts per
+ * window is generous.
+ */
+export const faceEnrollmentLimiter = rateLimit({
+  store: createStore("rl:enroll:"),
+  keyGenerator: perPrincipal,
+  passOnStoreError: true,
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
+  message: rateLimitResponse(
+    "Too many face registration attempts. Please wait a few minutes and try again."
   ),
 });
 
@@ -126,7 +234,7 @@ export const refreshTokenLimiter = rateLimit({
   max: 60,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: () => ENV.NODE_ENV === "test",
+  skip: skipInTest,
   message: rateLimitResponse(
     "Too many refresh attempts. Please try again in a few minutes."
   ),
@@ -143,7 +251,7 @@ export const demoLoginLimiter = rateLimit({
   max: 30,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: () => ENV.NODE_ENV === "test",
+  skip: skipInTest,
   message: rateLimitResponse(
     "Too many demo logins. Please try again in a few minutes."
   ),
@@ -151,13 +259,13 @@ export const demoLoginLimiter = rateLimit({
 
 export const otpVerifyLimiter = rateLimit({
   store: createStore("rl:otp-verify:"),
-  passOnStoreError: true,
+  passOnStoreError: false,
   windowMs: 15 * 60 * 1000,
   max: 10,
   skipSuccessfulRequests: true,
   standardHeaders: true,
   legacyHeaders: false,
-  skip: () => ENV.NODE_ENV === "test",
+  skip: skipInTest,
   message: rateLimitResponse(
     "Too many attempts. Please try again in a few minutes."
   ),

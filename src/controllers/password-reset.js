@@ -12,7 +12,7 @@ import {
 } from "../validation/password-reset-validation.js";
 import * as passwordResetService from "../services/password-reset.service.js";
 
-// Same response whether or not the account exists — avoids email enumeration.
+// Same response whether or not the account exists - avoids email enumeration.
 const REQUEST_SUCCESS_MESSAGE =
   "If an account exists with this email, you will receive a password reset link shortly.";
 

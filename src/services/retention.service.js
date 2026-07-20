@@ -8,17 +8,41 @@
 //   - dormant enrolled face templates (biometric minimization).
 import { prisma } from "../config/prisma-client.js";
 import logger from "../utils/logger.js";
-import { TEMPLATE_DORMANT_DAYS } from "../config/constants.js";
+import {
+  ANOMALY_RESOLVED_RETENTION_DAYS,
+  AUDIT_LOG_RETENTION_DAYS,
+  TEMPLATE_DORMANT_DAYS,
+} from "../config/constants.js";
 import { cleanupExpiredResetTokens } from "./password-reset.service.js";
 import { cleanupExpiredOtpCodes } from "./otp.service.js";
 import { cleanupExpiredRefreshTokens } from "./auth.service.js";
 import { cleanupExpiredChallenges } from "./liveness-challenge.service.js";
 import { purgeExpiredEvidence } from "./attendance-evidence.service.js";
+import { cleanupOldAuditLogs } from "./audit.service.js";
+
+const daysAgo = (days) => new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+/**
+ * Trims RESOLVED anomaly flags past their retention window. Unresolved flags
+ * are kept forever - they are open review items, not history.
+ */
+async function cleanupResolvedAnomalies() {
+  const { count } = await prisma.anomalyFlag.deleteMany({
+    where: { resolvedAt: { lt: daysAgo(ANOMALY_RESOLVED_RETENTION_DAYS) } },
+  });
+  return count;
+}
 
 /**
  * Purges enrolled templates for accounts that have not checked in for
  * TEMPLATE_DORMANT_DAYS. Clears the consent record alongside the template so a
  * re-enrollment must re-consent.
+ *
+ * Invariant note: the soft-delete extension scopes this updateMany to
+ * non-deleted users, so a soft-deleted account is never touched here. That is
+ * correct ONLY because softDeleteUser destroys biometrics itself inside its
+ * transaction - if that ever changes, deleted accounts' templates would
+ * escape this purge forever.
  */
 async function purgeDormantTemplates() {
   const cutoff = new Date(
@@ -62,6 +86,8 @@ export async function runRetention() {
     challenges: cleanupExpiredChallenges,
     evidence: purgeExpiredEvidence,
     dormantTemplates: purgeDormantTemplates,
+    auditLogs: () => cleanupOldAuditLogs(daysAgo(AUDIT_LOG_RETENTION_DAYS)),
+    resolvedAnomalies: cleanupResolvedAnomalies,
   };
 
   const counts = {};

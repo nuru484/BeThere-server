@@ -10,12 +10,15 @@ import request from "supertest";
 import app from "../../app.js";
 import { prisma } from "../../src/config/prisma-client.js";
 import {
+  adminCookie,
   attendantCookie,
+  createAdmin,
   createEventWithActiveSession,
   createAttendant,
   venueCodeFor,
   DESCRIPTOR,
 } from "../helpers.js";
+import { upcomingCodes } from "../../src/services/venue-code.service.js";
 
 const FRAME = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
 
@@ -89,6 +92,14 @@ describe("POST /attendance/:eventId (check-in)", () => {
 
     expect(res.status).toBe(201);
     expect(res.body.data.status).toMatch(/PRESENT|LATE/);
+
+    // The audit entry commits in the same transaction as the attendance row -
+    // a recorded check-in without its trail would defeat the audit product.
+    expect(
+      await prisma.auditLog.count({
+        where: { actorKind: "USER", actorId: user.id, action: "CHECK_IN" },
+      })
+    ).toBe(1);
   });
 
   it("rejects too few frames (validation)", async () => {
@@ -102,6 +113,27 @@ describe("POST /attendance/:eventId (check-in)", () => {
     });
 
     expect(res.status).toBe(400);
+  });
+
+  it("still accepts the scanned code at upload after it has rotated", async () => {
+    const { event, venueSecret } = await createEventWithActiveSession();
+    const user = await enrolled("slowscan@test.local");
+
+    // The code the user scanned two rotations ago: they took a while to
+    // perform three prompted actions and upload. It must still be honoured
+    // for the challenge's lifetime, or slow users are locked out.
+    const scannedEarlier = upcomingCodes(venueSecret, Date.now() - 60_000)[0]
+      .code;
+
+    const challenge = await requestChallenge(user, event);
+    expect(challenge.status).toBe(200);
+
+    const res = await submitFrames("post", user, event, {
+      token: challenge.body.data.challengeToken,
+      venueCode: scannedEarlier,
+    });
+
+    expect(res.status).toBe(201);
   });
 
   it("rejects the upload when the venue code is no longer valid", async () => {
@@ -176,5 +208,30 @@ describe("PUT /attendance/:eventId (check-out)", () => {
 
     const res = await requestChallenge(user, event, { mode: "out" });
     expect(res.status).toBe(404);
+  });
+});
+
+describe("GET /attendance-reports (filter hardening)", () => {
+  it("rejects an array search param with a clean 400, not a Prisma error", async () => {
+    const admin = await createAdmin({ email: "reports@test.local" });
+
+    // Express parses `?search[]=a&search[]=b` into an array; the shared
+    // parser must 400 it before it reaches a Prisma `contains` clause.
+    const res = await request(app)
+      .get("/api/v1/attendance-reports?search[]=a&search[]=b")
+      .set("Cookie", [adminCookie(admin)]);
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/invalid search/i);
+  });
+
+  it("rejects array values on the other free-text filters too", async () => {
+    const admin = await createAdmin({ email: "reports2@test.local" });
+
+    const res = await request(app)
+      .get("/api/v1/attendance-reports?eventName[]=a&city[]=b")
+      .set("Cookie", [adminCookie(admin)]);
+
+    expect(res.status).toBe(400);
   });
 });

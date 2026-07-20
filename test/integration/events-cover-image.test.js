@@ -100,7 +100,7 @@ describe("POST /api/v1/events", () => {
           city: "Accra",
         })
       )
-      .attach("coverImage", Buffer.from("fake-image-bytes"), {
+      .attach("coverImage", Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.from("fake-image-bytes")]), {
         filename: "cover.jpg",
         contentType: "image/jpeg",
       });
@@ -121,7 +121,7 @@ describe("PUT /api/v1/events/:eventId cover image wire semantics", () => {
     const res = await request(app)
       .put(`/api/v1/events/${event.id}`)
       .set("Cookie", [adminCookie(admin)])
-      .attach("coverImage", Buffer.from("new-image-bytes"), {
+      .attach("coverImage", Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.from("new-image-bytes")]), {
         filename: "new-cover.jpg",
         contentType: "image/jpeg",
       });

@@ -10,6 +10,7 @@ import { prisma } from "./src/config/prisma-client.js";
 import { startWorkers, stopWorkers } from "./src/jobs/lifecycle.js";
 import { closeRedisClient } from "./src/lib/redis.js";
 import { flushSentry } from "./src/lib/sentry.js";
+import { drainDispatches } from "./src/utils/dispatch-async.js";
 import logger from "./src/utils/logger.js";
 
 const port = ENV.PORT;
@@ -45,6 +46,10 @@ const shutdown = async (signal) => {
       server.close(() => resolve());
     });
     await stopWorkers();
+    // Deferred sends (password-reset email, OTP delivery) were dispatched off
+    // the response path; a request already answered 200 must not lose its
+    // email to the deploy. Bounded, so a hung provider cannot stall the exit.
+    await drainDispatches();
     await closeRedisClient();
     await flushSentry();
     await prisma.$disconnect();

@@ -14,6 +14,11 @@ import {
   NotFoundError,
   UnauthorizedError,
 } from "../middleware/error-handler.js";
+import {
+  ATTENDANCE_LATE_GRACE_MS,
+  LIVENESS,
+  VENUE_CODE,
+} from "../config/constants.js";
 import { isFaceDescriptor } from "../utils/face-match.js";
 import { decryptTemplate } from "../utils/biometric-crypto.js";
 import { eventCalendarDay, todayAtEventTime } from "../utils/time-context.js";
@@ -21,7 +26,7 @@ import { consumeChallenge, issueChallenge } from "./liveness-challenge.service.j
 import { getLivenessVerifier } from "./liveness/liveness-verifier.js";
 import { storeEvidence } from "./attendance-evidence.service.js";
 import { flagAnomaly } from "./anomaly.service.js";
-import { recordAudit } from "./audit.service.js";
+import { auditLogWrite, recordAudit } from "./audit.service.js";
 import { ensureVenueSecret, isValidVenueCode } from "./venue-code.service.js";
 import logger from "../utils/logger.js";
 
@@ -113,13 +118,24 @@ function assertEnrolled(user) {
   }
 }
 
+/**
+ * Tolerance for the venue code when it is RE-checked with the uploaded frames.
+ * The code is scanned at the preflight, so it has to remain acceptable for the
+ * whole challenge lifetime plus the normal skew - otherwise a user who scanned
+ * near the end of a 30s window is told the code expired while they were
+ * performing the actions they were just asked to perform.
+ */
+const UPLOAD_SKEW_WINDOWS =
+  VENUE_CODE.SKEW_WINDOWS +
+  Math.ceil(LIVENESS.CHALLENGE_TTL_MS / VENUE_CODE.PERIOD_MS);
+
 /** Validates the scanned rotating venue code against the event's secret. */
-async function assertValidVenueCode(eventId, venueCode) {
+async function assertValidVenueCode(eventId, venueCode, { skewWindows } = {}) {
   const secret = await ensureVenueSecret(eventId);
   if (!secret) {
     throw new NotFoundError(`Event with ID ${eventId} not found.`);
   }
-  if (!isValidVenueCode(secret, venueCode)) {
+  if (!isValidVenueCode(secret, venueCode, Date.now(), skewWindows)) {
     throw new BadRequestError(
       "Invalid or expired venue code. Please scan the code shown at the event location."
     );
@@ -131,17 +147,11 @@ async function assertValidVenueCode(eventId, venueCode) {
  * session and the PRESENT/LATE status. Shared cheap gate before the ML step.
  */
 async function resolveSessionForCheckIn(event, now) {
-  const currentDate = eventCalendarDay(now);
   const currentSession = await resolveActiveSession(event.id, now);
 
   if (!currentSession) {
     throw new BadRequestError(
       "No active session for this event at the moment. Please wait for the next session to check in."
-    );
-  }
-  if (currentDate > new Date(currentSession.endDate)) {
-    throw new BadRequestError(
-      "The current session has ended. Please wait for the next session to check in."
     );
   }
 
@@ -159,9 +169,10 @@ async function resolveSessionForCheckIn(event, now) {
     );
   }
 
-  const oneHourAfterStart = new Date(sessionStartTime);
-  oneHourAfterStart.setHours(oneHourAfterStart.getHours() + 1);
-  const status = now <= oneHourAfterStart ? "PRESENT" : "LATE";
+  const presentUntil = new Date(
+    sessionStartTime.getTime() + ATTENDANCE_LATE_GRACE_MS
+  );
+  const status = now <= presentUntil ? "PRESENT" : "LATE";
 
   return { currentSession, status };
 }
@@ -235,6 +246,7 @@ export async function prepareAttendanceChallenge(
   const user = await findUserOrThrow(userId);
   assertEnrolled(user);
 
+  // Tight tolerance here: this IS the moment the code is scanned.
   await assertValidVenueCode(eventId, venueCode);
 
   const event = await findEventOrThrow(eventId);
@@ -279,7 +291,9 @@ export async function checkIn(
   // off-site, and the frames uploaded from anywhere for the life of the
   // challenge. Codes rotate every 30s, so requiring a still-valid one at
   // upload keeps the proof of presence attached to the proof of liveness.
-  await assertValidVenueCode(eventId, venueCode);
+  await assertValidVenueCode(eventId, venueCode, {
+    skewWindows: UPLOAD_SKEW_WINDOWS,
+  });
 
   const event = await findEventOrThrow(eventId);
   const now = new Date();
@@ -309,24 +323,28 @@ export async function checkIn(
     action: "CHECK_IN",
   });
 
-  const attendance = await prisma.attendance.create({
-    data: { userId, sessionId: currentSession.id, checkInTime: now, status },
-    include: ATTENDANCE_INCLUDE,
-  });
-
-  await prisma.user.update({
-    where: { id: userId },
-    data: { faceLastUsedAt: now },
-  });
-  await recordAudit({
-    actorKind: "USER",
-    actorId: userId,
-    action: "CHECK_IN",
-    targetType: "Event",
-    targetId: eventId,
-    metadata: { status, sessionId: currentSession.id, livenessScore: verdict.score },
-    ip,
-  });
+  // One transaction: the attendance row, the biometric last-use stamp, and
+  // the audit entry commit together - a crash mid-sequence must not leave a
+  // check-in without its audit trail (this IS the audit product).
+  const [attendance] = await prisma.$transaction([
+    prisma.attendance.create({
+      data: { userId, sessionId: currentSession.id, checkInTime: now, status },
+      include: ATTENDANCE_INCLUDE,
+    }),
+    prisma.user.update({
+      where: { id: userId },
+      data: { faceLastUsedAt: now },
+    }),
+    auditLogWrite({
+      actorKind: "USER",
+      actorId: userId,
+      action: "CHECK_IN",
+      targetType: "Event",
+      targetId: eventId,
+      metadata: { status, sessionId: currentSession.id, livenessScore: verdict.score },
+      ip,
+    }),
+  ]);
 
   return attendance;
 }
@@ -344,7 +362,9 @@ export async function checkOut(
   const enrolled = resolveEnrolledDescriptor(user);
 
   // Check-out re-proves presence exactly like check-in.
-  await assertValidVenueCode(eventId, venueCode);
+  await assertValidVenueCode(eventId, venueCode, {
+    skewWindows: UPLOAD_SKEW_WINDOWS,
+  });
 
   const event = await findEventOrThrow(eventId);
   const now = new Date();
@@ -396,21 +416,23 @@ export async function checkOut(
     action: "CHECK_OUT",
   });
 
-  const updated = await prisma.attendance.update({
-    where: { userId_sessionId: { userId, sessionId: currentSession.id } },
-    data: { checkOutTime: now },
-    include: ATTENDANCE_INCLUDE,
-  });
-
-  await recordAudit({
-    actorKind: "USER",
-    actorId: userId,
-    action: "CHECK_OUT",
-    targetType: "Event",
-    targetId: eventId,
-    metadata: { sessionId: currentSession.id },
-    ip,
-  });
+  // Same atomicity as check-in: the stamp and its audit entry land together.
+  const [updated] = await prisma.$transaction([
+    prisma.attendance.update({
+      where: { userId_sessionId: { userId, sessionId: currentSession.id } },
+      data: { checkOutTime: now },
+      include: ATTENDANCE_INCLUDE,
+    }),
+    auditLogWrite({
+      actorKind: "USER",
+      actorId: userId,
+      action: "CHECK_OUT",
+      targetType: "Event",
+      targetId: eventId,
+      metadata: { sessionId: currentSession.id },
+      ip,
+    }),
+  ]);
 
   return updated;
 }

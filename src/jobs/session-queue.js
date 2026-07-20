@@ -1,4 +1,4 @@
-// src/jobs/sessionQueue.js
+// src/jobs/session-queue.js
 import { Queue } from "bullmq";
 import { createRedisConnection } from "../config/redis-connection.js";
 
@@ -8,6 +8,8 @@ export const sessionQueue = new Queue("sessionQueue", {
     attempts: 3,
     backoff: { type: "exponential", delay: 5000 },
     removeOnComplete: 100,
-    removeOnFail: false,
+    // Bounded: `false` kept every failed job in Redis forever. The most
+    // recent failures are plenty for diagnosis; Sentry has the rest.
+    removeOnFail: { count: 500 },
   },
 });

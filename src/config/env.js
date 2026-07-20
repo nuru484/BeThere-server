@@ -155,8 +155,37 @@ const ENV = {
   GMAIL_PASSWORD: envRequired("GMAIL_PASSWORD"),
   GMAIL_USER,
 
+  /** Pino level override; defaults by NODE_ENV (silent in tests). */
+  LOG_LEVEL: envOptional("LOG_LEVEL"),
+
   NODE_ENV: envOptional("NODE_ENV") ?? "development",
   PORT: envNumber("PORT", 8080),
+
+  /**
+   * Express trust-proxy setting. Default "1" (exactly one hop: the platform's
+   * load balancer). Set to "false" when the app is exposed directly, so a
+   * client cannot spoof X-Forwarded-For into req.ip - the value rate limiting
+   * keys on and the audit trail records. Accepts false | true | a hop count.
+   */
+  TRUST_PROXY: (() => {
+    const raw = envOptional("TRUST_PROXY") ?? "1";
+    if (raw === "false") return false;
+    if (raw === "true") return true;
+    const hops = Number(raw);
+    if (!Number.isInteger(hops) || hops < 0) {
+      throw new Error(
+        `Invalid TRUST_PROXY "${raw}": use "false", "true", or a hop count.`
+      );
+    }
+    return hops;
+  })(),
+
+  /**
+   * Seeds five SAMPLE attendants (random passwords) alongside the demo data.
+   * Separate from ADMIN_SEED_ENABLED so creating the first real admin in
+   * production never also plants example accounts.
+   */
+  SEED_SAMPLE_DATA: envBool("SEED_SAMPLE_DATA"),
 
   REDIS_URL: envRequired("REDIS_URL"),
   REFRESH_TOKEN_SECRET: envRequired("REFRESH_TOKEN_SECRET"),
@@ -176,6 +205,12 @@ const ENV = {
    * process runs `npm run worker`, so jobs are never processed twice.
    */
   WEB_DISABLE_WORKERS: envBool("WEB_DISABLE_WORKERS"),
+
+  /**
+   * Port for the dedicated worker process's minimal health endpoint (the
+   * Docker HEALTHCHECK hits it). 0 disables it.
+   */
+  WORKER_HEALTH_PORT: envNumber("WORKER_HEALTH_PORT", 8081),
 };
 
 // Fail closed: LIVENESS_ENABLED=false swaps in a verifier that passes EVERY

@@ -119,7 +119,7 @@ describe("PATCH /api/v1/admins/:adminId/profile-picture", () => {
     const res = await request(app)
       .patch(`/api/v1/admins/${admin.id}/profile-picture`)
       .set("Cookie", [adminCookie(admin)])
-      .attach("profilePicture", Buffer.from("fake-image-bytes"), {
+      .attach("profilePicture", Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.from("fake-image-bytes")]), {
         filename: "me.png",
         contentType: "image/png",
       });
@@ -136,7 +136,7 @@ describe("PATCH /api/v1/admins/:adminId/profile-picture", () => {
     const res = await request(app)
       .patch(`/api/v1/admins/${peer.id}/profile-picture`)
       .set("Cookie", [adminCookie(admin)])
-      .attach("profilePicture", Buffer.from("fake-image-bytes"), {
+      .attach("profilePicture", Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.from("fake-image-bytes")]), {
         filename: "me.png",
         contentType: "image/png",
       });

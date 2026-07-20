@@ -4,42 +4,92 @@
 // workers in-process by default (single deployment) and worker.js is the
 // dedicated worker entry. Imports are lazy so a web process with
 // WEB_DISABLE_WORKERS=true never opens a Redis connection for them.
+import { captureError } from "../lib/sentry.js";
 import logger from "../utils/logger.js";
 
 let running = null;
 
+/**
+ * (Re-)registers a repeatable job with the current cron pattern. Repeat
+ * schedules are keyed by their pattern, so changing the cron in code merely
+ * ADDS a second schedule while the old one keeps firing forever - any
+ * schedule for this job name whose pattern differs is removed first.
+ */
+async function ensureRepeatableJob(queue, name, pattern) {
+  const existing = await queue.getRepeatableJobs();
+  for (const job of existing) {
+    if (job.name === name && job.pattern !== pattern) {
+      await queue.removeRepeatableByKey(job.key);
+      logger.info(
+        `🧹 Removed stale repeat schedule for ${name} (${job.pattern} -> ${pattern})`
+      );
+    }
+  }
+  await queue.add(name, {}, { repeat: { pattern } });
+}
+
+/** Job-failure reporting shared by every worker: log + Sentry (DSN-gated). */
+function reportJobFailure(queueName) {
+  return (job, err) => {
+    logger.error(err, `❌ ${queueName} job ${job?.id} failed`);
+    captureError(err, {
+      queue: queueName,
+      jobId: job?.id,
+      jobName: job?.name,
+      jobData: job?.data,
+      attemptsMade: job?.attemptsMade,
+    });
+  };
+}
+
 export async function startWorkers() {
   if (running) return running;
 
-  const [{ sessionWorker }, scheduler, { tokenCleanupQueue }, retentionService, bullmq, redis] =
-    await Promise.all([
-      import("./session-worker.js"),
-      import("./session-scheduler.js"),
-      import("./token-cleanup.js"),
-      import("../services/retention.service.js"),
-      import("bullmq"),
-      import("../config/redis-connection.js"),
-    ]);
+  const [
+    { createSessionWorker },
+    scheduler,
+    { tokenCleanupQueue },
+    { sessionQueue },
+    { sessionFinalizerQueue },
+    { finalizeDueSessions },
+    retentionService,
+    bullmq,
+    redis,
+  ] = await Promise.all([
+    import("./session-worker.js"),
+    import("./session-scheduler.js"),
+    import("./token-cleanup.js"),
+    import("./session-queue.js"),
+    import("./session-finalizer.js"),
+    import("../services/session-finalizer.service.js"),
+    import("../services/retention.service.js"),
+    import("bullmq"),
+    import("../config/redis-connection.js"),
+  ]);
 
   const { sessionSchedulerQueue, scheduleUpcomingSessions } = scheduler;
   const { Worker } = bullmq;
   const { createRedisConnection } = redis;
 
+  const sessionWorker = createSessionWorker();
+
   logger.info("🚀 Session worker started and listening for jobs...");
 
-  // Run the scheduler immediately on startup.
+  // Run the scheduler and finalizer immediately on startup, so a deploy that
+  // was down over a boundary catches up without waiting for the next cron.
   scheduleUpcomingSessions().catch((err) => logger.error(err));
+  finalizeDueSessions().catch((err) => logger.error(err));
 
   // Daily checks: session generation at midnight, token cleanup at 03:00.
-  await sessionSchedulerQueue.add(
-    "dailyCheck",
-    {},
-    { repeat: { pattern: "0 0 * * *" } }
-  );
-  await tokenCleanupQueue.add(
-    "dailyCleanup",
-    {},
-    { repeat: { pattern: "0 3 * * *" } }
+  await ensureRepeatableJob(sessionSchedulerQueue, "dailyCheck", "0 0 * * *");
+  await ensureRepeatableJob(tokenCleanupQueue, "dailyCleanup", "0 3 * * *");
+  // Session finalization (absence marking + auto check-out): frequent, so a
+  // finished session closes its books within minutes of the grace elapsing.
+  const { SESSION_FINALIZER } = await import("../config/constants.js");
+  await ensureRepeatableJob(
+    sessionFinalizerQueue,
+    "finalizeSessions",
+    SESSION_FINALIZER.CRON_PATTERN
   );
 
   const schedulerWorker = new Worker(
@@ -49,6 +99,7 @@ export async function startWorkers() {
     },
     { connection: createRedisConnection() }
   );
+  schedulerWorker.on("failed", reportJobFailure("sessionScheduler"));
 
   const tokenCleanupWorker = new Worker(
     "tokenCleanup",
@@ -57,10 +108,32 @@ export async function startWorkers() {
     },
     { connection: createRedisConnection() }
   );
+  tokenCleanupWorker.on("failed", reportJobFailure("tokenCleanup"));
+
+  const sessionFinalizerWorker = new Worker(
+    "sessionFinalizer",
+    async () => {
+      await finalizeDueSessions();
+    },
+    { connection: createRedisConnection() }
+  );
+  sessionFinalizerWorker.on("failed", reportJobFailure("sessionFinalizer"));
 
   running = {
-    workers: [sessionWorker, schedulerWorker, tokenCleanupWorker],
-    queues: [sessionSchedulerQueue, tokenCleanupQueue],
+    workers: [
+      sessionWorker,
+      schedulerWorker,
+      tokenCleanupWorker,
+      sessionFinalizerWorker,
+    ],
+    // sessionQueue too: it holds its own Redis connection, and leaving it open
+    // meant shutdown always waited out the 30s force-exit timer.
+    queues: [
+      sessionSchedulerQueue,
+      tokenCleanupQueue,
+      sessionQueue,
+      sessionFinalizerQueue,
+    ],
   };
   return running;
 }

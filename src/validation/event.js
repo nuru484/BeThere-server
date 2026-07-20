@@ -1,4 +1,5 @@
 import { body } from "express-validator";
+import { RECURRENCE_INTERVAL_MESSAGE } from "../config/constants.js";
 
 // Event create/update accept BOTH plain JSON and multipart/form-data (the
 // latter for the coverImage file). Under multipart every body value arrives
@@ -29,6 +30,50 @@ const coverImageRemovalRule = body("coverImage")
   .withMessage(
     "coverImage accepts only an empty string (remove). Send a file to replace it."
   );
+
+// Stops a new bad recurrence config at the boundary (see the constant for
+// why). The service repeats the check against the MERGED values, since a
+// partial update can supply either half of the pair.
+const isRecurringValue = (value) => value === true || value === "true";
+
+// The daily window and the date range must be coherent, or the event is
+// permanently un-checkable: an endTime before startTime means the window
+// never opens ("not yet open" all morning, "closed" all evening), and an
+// endDate before startDate yields a zero-session event. Checked here when
+// both halves are in the body; the service re-checks the MERGED values on
+// update, where either half may come from the existing row.
+const timeWindowRule = body("endTime").custom((endTime, { req }) => {
+  const startTime = req.body?.startTime;
+  if (typeof startTime !== "string" || typeof endTime !== "string") return true;
+  if (endTime <= startTime) {
+    throw new Error("endTime must be after startTime.");
+  }
+  return true;
+});
+
+const dateRangeRule = body("endDate").custom((endDate, { req }) => {
+  const startDate = req.body?.startDate;
+  if (!startDate || !endDate) return true;
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) return true;
+  if (end < start) {
+    throw new Error("endDate must be on or after startDate.");
+  }
+  return true;
+});
+
+const recurrenceIntervalRule = body("recurrenceInterval")
+  .optional({ values: "falsy" })
+  .custom((value, { req }) => {
+    if (!isRecurringValue(req.body?.isRecurring)) return true;
+    const durationDays = Number(req.body?.durationDays);
+    if (!Number.isFinite(durationDays)) return true;
+    if (Number(value) < durationDays) {
+      throw new Error(RECURRENCE_INTERVAL_MESSAGE);
+    }
+    return true;
+  });
 
 export const createEventValidation = [
   body("title")
@@ -66,16 +111,16 @@ export const createEventValidation = [
     .withMessage("Start time is required.")
     .isString()
     .withMessage("Start time must be a string.")
-    .matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/)
-    .withMessage("Start time must be in HH:MM format (e.g., 06:00)."),
+    .matches(/^([01][0-9]|2[0-3]):[0-5][0-9]$/)
+    .withMessage("Start time must be in two-digit HH:MM format (e.g., 06:00)."),
 
   body("endTime")
     .exists({ checkFalsy: true })
     .withMessage("End time is required.")
     .isString()
     .withMessage("End time must be a string.")
-    .matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/)
-    .withMessage("End time must be in HH:MM format (e.g., 19:30)."),
+    .matches(/^([01][0-9]|2[0-3]):[0-5][0-9]$/)
+    .withMessage("End time must be in two-digit HH:MM format (e.g., 19:30)."),
 
   body("isRecurring")
     .optional()
@@ -94,6 +139,10 @@ export const createEventValidation = [
     .isInt({ min: 1 })
     .withMessage("Duration days must be a positive integer.")
     .toInt(),
+
+  recurrenceIntervalRule,
+  timeWindowRule,
+  dateRangeRule,
 
   body("type")
     .exists({ checkFalsy: true })
@@ -169,15 +218,15 @@ export const updateEventValidation = [
     .optional()
     .isString()
     .withMessage("Start time must be a string.")
-    .matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/)
-    .withMessage("Start time must be in HH:MM format (e.g., 06:00)."),
+    .matches(/^([01][0-9]|2[0-3]):[0-5][0-9]$/)
+    .withMessage("Start time must be in two-digit HH:MM format (e.g., 06:00)."),
 
   body("endTime")
     .optional()
     .isString()
     .withMessage("End time must be a string.")
-    .matches(/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/)
-    .withMessage("End time must be in HH:MM format (e.g., 19:30)."),
+    .matches(/^([01][0-9]|2[0-3]):[0-5][0-9]$/)
+    .withMessage("End time must be in two-digit HH:MM format (e.g., 19:30)."),
 
   body("isRecurring")
     .optional()
@@ -196,6 +245,10 @@ export const updateEventValidation = [
     .isInt({ min: 1 })
     .withMessage("durationDays must be a positive integer.")
     .toInt(),
+
+  recurrenceIntervalRule,
+  timeWindowRule,
+  dateRangeRule,
 
   body("type")
     .optional()

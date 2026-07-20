@@ -1,4 +1,4 @@
-// src/middlewares/validation-middleware.js
+// src/validation/validation-error-handler.js
 import { validationResult } from "express-validator";
 import { ValidationError as CustomValidationError } from "../middleware/error-handler.js";
 
@@ -41,11 +41,9 @@ export const validateRequest = (req, res, next) => {
 };
 
 /**
- * Middleware factory for common CRUD operations
+ * Middleware factory: validators + the shared result check. One name only -
+ * create/update/delete/custom were four identical copies of this function.
  */
 export const validationMiddleware = {
   create: (validators) => [...validators, validateRequest],
-  update: (validators) => [...validators, validateRequest],
-  delete: (validators) => [...validators, validateRequest],
-  custom: (validators) => [...validators, validateRequest],
 };

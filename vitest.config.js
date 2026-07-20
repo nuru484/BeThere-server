@@ -44,8 +44,10 @@ url.pathname = "/bethere_test";
 const testDatabaseUrl = url.toString();
 
 // globalSetup runs in this same process; the test.env block below only
-// reaches the test workers.
+// reaches the test workers. REDIS_URL is exposed the same way so the
+// global-setup preflight can ping it.
 process.env.DATABASE_URL = testDatabaseUrl;
+process.env.REDIS_URL = get("REDIS_URL", "redis://localhost:6379");
 
 export default defineConfig({
   test: {
@@ -57,6 +59,11 @@ export default defineConfig({
     maxWorkers: 1,
     hookTimeout: 60_000,
     testTimeout: 30_000,
+    coverage: {
+      provider: "v8",
+      include: ["src/**", "app.js", "server.js", "worker.js"],
+      reporter: ["text", "html"],
+    },
     env: {
       NODE_ENV: "test",
       DATABASE_URL: testDatabaseUrl,

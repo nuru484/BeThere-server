@@ -1,17 +1,11 @@
 // src/controllers/detective.js
 //
 // Thin HTTP adapters over the detective read service (admin review surface).
-import { asyncHandler, ValidationError } from "../middleware/error-handler.js";
+import { asyncHandler } from "../middleware/error-handler.js";
 import { HTTP_STATUS_CODES } from "../config/constants.js";
 import { parsePagination, paginationMeta } from "../utils/pagination.js";
+import { parseId } from "../utils/parse-id.js";
 import * as detectiveService from "../services/detective.service.js";
-
-const parseId = (value, message) => {
-  if (!value || isNaN(parseInt(value))) {
-    throw new ValidationError(message);
-  }
-  return parseInt(value);
-};
 
 export const getAuditLogs = asyncHandler(async (req, res, _next) => {
   const { page, limit, skip } = parsePagination(req.query);

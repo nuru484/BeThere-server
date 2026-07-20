@@ -12,6 +12,7 @@ import {
 import { authorizeRole } from "../middleware/authorize-role.js";
 import { authenticateJWT } from "../middleware/jwt-authentication.js";
 import { upload } from "../config/multer-setup.js";
+import { validateImageUploads } from "../middleware/validate-image-upload.js";
 
 // Multer runs before validation so multipart bodies are parsed into
 // req.body/req.file by the time the validators see them. Plain JSON
@@ -21,6 +22,7 @@ router.post(
   authenticateJWT,
   authorizeRole(["ADMIN"]),
   upload.single("coverImage"),
+  validateImageUploads,
   ...createEvent
 );
 
@@ -29,6 +31,7 @@ router.put(
   authenticateJWT,
   authorizeRole(["ADMIN"]),
   upload.single("coverImage"),
+  validateImageUploads,
   ...updateEvent
 );
 

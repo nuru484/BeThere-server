@@ -14,7 +14,11 @@ import {
 } from "../middleware/error-handler.js";
 import { deleteImage, uploadImage } from "../utils/cloudinary.js";
 import { assertSelfOrAdmin } from "../utils/authorization.js";
-import { revokeAllSessions, toSafeUser } from "./auth.service.js";
+import {
+  invalidateRevokedSessionsCache,
+  revokeAllSessions,
+  toSafeUser,
+} from "./auth.service.js";
 
 /**
  * The public user projection. faceScan is selected only so toSafeUser can
@@ -149,18 +153,28 @@ export async function softDeleteUser(actor, targetUserId) {
 
   // Destroy biometric data on deletion (right-to-be-forgotten): a removed
   // account must not leave an enrolled template or consent record behind.
-  await prisma.user.update({
-    where: { id: targetUserId },
-    data: {
-      deletedAt: new Date(),
-      faceScan: null,
-      faceScanEnc: null,
-      biometricConsentAt: null,
-      biometricConsentVersion: null,
-      faceLastUsedAt: null,
-    },
+  // Interactive transaction (revokeAllSessions runs its own statements): the
+  // deletion and the session purge commit or roll back as one, so a crash
+  // cannot leave a "deleted" account whose sessions still work.
+  await prisma.$transaction(async (tx) => {
+    await tx.user.update({
+      where: { id: targetUserId },
+      data: {
+        deletedAt: new Date(),
+        faceScan: null,
+        faceScanEnc: null,
+        biometricConsentAt: null,
+        biometricConsentVersion: null,
+        faceLastUsedAt: null,
+      },
+    });
+    await revokeAllSessions("USER", targetUserId, tx);
   });
-  await revokeAllSessions("USER", targetUserId);
+
+  // AFTER the commit, never inside it: an invalidation mid-transaction lets a
+  // concurrent request repopulate the cache from the uncommitted old epoch and
+  // keep the deleted account's access tokens alive for the full 60s TTL.
+  invalidateRevokedSessionsCache("USER", targetUserId);
 }
 
 /**

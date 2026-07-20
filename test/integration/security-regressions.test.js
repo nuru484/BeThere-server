@@ -22,7 +22,7 @@ describe("soft-deleted admin login", () => {
       .post("/api/v1/auth/login")
       .send({ email: "gone@test.local", password: "Password123!" });
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(401);
     expect(JSON.stringify(res.body)).not.toMatch(/accessToken|refreshToken/);
   });
 });

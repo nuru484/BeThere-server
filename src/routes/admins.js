@@ -13,6 +13,7 @@ import {
 import { authorizeRole } from "../middleware/authorize-role.js";
 import { authenticateJWT } from "../middleware/jwt-authentication.js";
 import { upload } from "../config/multer-setup.js";
+import { validateImageUploads } from "../middleware/validate-image-upload.js";
 
 router.post("/", authenticateJWT, authorizeRole(["ADMIN"]), ...createAdmin);
 router.get("/", authenticateJWT, authorizeRole(["ADMIN"]), getAllAdmins);
@@ -43,6 +44,7 @@ router.patch(
   authenticateJWT,
   authorizeRole(["ADMIN"]),
   upload.single("profilePicture"),
+  validateImageUploads,
   updateAdminProfilePicture
 );
 

@@ -17,6 +17,8 @@ import detectiveRoutes from "./detective.js";
 routes.use("/auth", authRoutes);
 routes.use("/events", eventRoutes);
 routes.use("/attendance", attendanceRoutes);
+// camelCase is off-convention (every other mount is kebab-case), but the
+// deployed clients call /refreshToken, so the path stays for compatibility.
 routes.use("/refreshToken", refreshTokenRoute);
 routes.use("/users", usersRoutes);
 routes.use("/admins", adminsRoutes);

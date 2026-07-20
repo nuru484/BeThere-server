@@ -1,4 +1,4 @@
-// src/config/redisConnection.ts
+// src/config/redis-connection.js
 import ENV from "./env.js";
 
 export function createRedisConnection() {

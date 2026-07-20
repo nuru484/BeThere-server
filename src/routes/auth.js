@@ -31,8 +31,16 @@ router.post("/logout", logout);
 // The signed-in principal, resolved from the cookie (client hydration).
 router.get("/me", authenticateJWT, me);
 
-// 2FA management for the signed-in principal (code-proven toggles).
-router.post("/2fa/challenge", authenticateJWT, twoFactorChallenge);
+// 2FA management for the signed-in principal (code-proven toggles). The
+// challenge sends an SMS/email per hit, so it carries the same limiter as its
+// sibling send-costing endpoint (the service-level 60s cooldown is the second
+// layer, not the only one).
+router.post(
+  "/2fa/challenge",
+  otpRequestLimiter,
+  authenticateJWT,
+  twoFactorChallenge
+);
 router.post("/2fa/enable", authenticateJWT, twoFactorEnable);
 router.post("/2fa/disable", authenticateJWT, twoFactorDisable);
 

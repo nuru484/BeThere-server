@@ -8,6 +8,7 @@ import { ValidationError } from "../middleware/error-handler.js";
 import {
   ATTENDANCE_LIST_INCLUDE,
   checkInTimeRange,
+  parseSearchFilter,
   parseStatusFilter,
 } from "./attendance-query.service.js";
 
@@ -28,6 +29,16 @@ function buildReportWhere({
   country,
 }) {
   const whereClause = {};
+
+  // Every free-text filter goes through the shared parser: Express turns
+  // `?search[]=x` into an array, which must 400 as a bad filter instead of
+  // reaching Prisma as a non-string `contains` value.
+  const searchTerm = parseSearchFilter(search);
+  const eventNameTerm = parseSearchFilter(eventName);
+  const eventTypeTerm = parseSearchFilter(eventType);
+  const locationNameTerm = parseSearchFilter(locationName);
+  const cityTerm = parseSearchFilter(city);
+  const countryTerm = parseSearchFilter(country);
 
   if (userId) {
     if (isNaN(parseInt(userId))) {
@@ -63,8 +74,8 @@ function buildReportWhere({
 
   const eventFilters = {};
 
-  if (eventName) {
-    eventFilters.title = { contains: eventName, mode: "insensitive" };
+  if (eventNameTerm) {
+    eventFilters.title = { contains: eventNameTerm, mode: "insensitive" };
   }
 
   if (isRecurring !== undefined) {
@@ -72,22 +83,22 @@ function buildReportWhere({
     eventFilters.isRecurring = recurringValue;
   }
 
-  if (eventType) {
-    eventFilters.type = { contains: eventType, mode: "insensitive" };
+  if (eventTypeTerm) {
+    eventFilters.type = { contains: eventTypeTerm, mode: "insensitive" };
   }
 
   const locationFilters = {};
 
-  if (locationName) {
-    locationFilters.name = { contains: locationName, mode: "insensitive" };
+  if (locationNameTerm) {
+    locationFilters.name = { contains: locationNameTerm, mode: "insensitive" };
   }
 
-  if (city) {
-    locationFilters.city = { contains: city, mode: "insensitive" };
+  if (cityTerm) {
+    locationFilters.city = { contains: cityTerm, mode: "insensitive" };
   }
 
-  if (country) {
-    locationFilters.country = { contains: country, mode: "insensitive" };
+  if (countryTerm) {
+    locationFilters.country = { contains: countryTerm, mode: "insensitive" };
   }
 
   // Combine all filters into session and event structure
@@ -103,42 +114,44 @@ function buildReportWhere({
     whereClause.session = sessionFilters;
   }
 
-  if (search) {
+  if (searchTerm) {
     whereClause.OR = [
-      { user: { firstName: { contains: search, mode: "insensitive" } } },
-      { user: { lastName: { contains: search, mode: "insensitive" } } },
-      { user: { email: { contains: search, mode: "insensitive" } } },
+      { user: { firstName: { contains: searchTerm, mode: "insensitive" } } },
+      { user: { lastName: { contains: searchTerm, mode: "insensitive" } } },
+      { user: { email: { contains: searchTerm, mode: "insensitive" } } },
       {
         session: {
-          event: { title: { contains: search, mode: "insensitive" } },
+          event: { title: { contains: searchTerm, mode: "insensitive" } },
         },
       },
       {
         session: {
-          event: { description: { contains: search, mode: "insensitive" } },
+          event: { description: { contains: searchTerm, mode: "insensitive" } },
         },
       },
       {
-        session: { event: { type: { contains: search, mode: "insensitive" } } },
+        session: {
+          event: { type: { contains: searchTerm, mode: "insensitive" } },
+        },
       },
       {
         session: {
           event: {
-            location: { name: { contains: search, mode: "insensitive" } },
+            location: { name: { contains: searchTerm, mode: "insensitive" } },
           },
         },
       },
       {
         session: {
           event: {
-            location: { city: { contains: search, mode: "insensitive" } },
+            location: { city: { contains: searchTerm, mode: "insensitive" } },
           },
         },
       },
       {
         session: {
           event: {
-            location: { country: { contains: search, mode: "insensitive" } },
+            location: { country: { contains: searchTerm, mode: "insensitive" } },
           },
         },
       },
@@ -196,30 +209,36 @@ async function findTopAttendees(whereClause) {
     take: 5,
   });
 
-  return Promise.all(
-    topAttendeesQuery.map(async (attendee) => {
-      // findUnique ON PURPOSE: attendance history survives soft deletion,
-      // so a deleted account must still resolve for historical reports.
-      const user = await prisma.user.findUnique({
-        where: { id: attendee.userId },
-        select: {
-          id: true,
-          firstName: true,
-          lastName: true,
-          email: true,
-          profilePicture: true,
-        },
-      });
+  // One IN query + Map join instead of a findUnique per attendee (N+1).
+  // The empty deletedAt filter names the column explicitly, which opts out
+  // of the soft-delete scope (see soft-delete-extension.js) without adding a
+  // constraint: attendance history survives soft deletion, so a deleted
+  // account must still resolve for historical reports.
+  const users = await prisma.user.findMany({
+    where: {
+      id: { in: topAttendeesQuery.map((attendee) => attendee.userId) },
+      deletedAt: {},
+    },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true,
+      profilePicture: true,
+    },
+  });
+  const userById = new Map(users.map((user) => [user.id, user]));
 
-      return {
-        userId: attendee.userId,
-        userName: `${user.firstName} ${user.lastName}`,
-        email: user.email,
-        profilePicture: user.profilePicture,
-        attendanceCount: attendee._count.id,
-      };
-    })
-  );
+  return topAttendeesQuery.map((attendee) => {
+    const user = userById.get(attendee.userId);
+    return {
+      userId: attendee.userId,
+      userName: `${user.firstName} ${user.lastName}`,
+      email: user.email,
+      profilePicture: user.profilePicture,
+      attendanceCount: attendee._count.id,
+    };
+  });
 }
 
 /** The full report payload: page rows, leaderboard, summary, and total. */
@@ -239,19 +258,21 @@ export async function getAttendanceReports({ skip, limit, ...filters }) {
     prisma.attendance.count({ where: whereClause }),
   ]);
 
-  const [topAttendees, presentCount, lateCount, absentCount] =
-    await Promise.all([
-      findTopAttendees(whereClause),
-      prisma.attendance.count({
-        where: { ...whereClause, status: "PRESENT" },
-      }),
-      prisma.attendance.count({
-        where: { ...whereClause, status: "LATE" },
-      }),
-      prisma.attendance.count({
-        where: { ...whereClause, status: "ABSENT" },
-      }),
-    ]);
+  // One groupBy instead of a count round-trip per status.
+  const [topAttendees, statusGroups] = await Promise.all([
+    findTopAttendees(whereClause),
+    prisma.attendance.groupBy({
+      by: ["status"],
+      where: whereClause,
+      _count: { _all: true },
+    }),
+  ]);
+
+  const statusCount = (status) =>
+    statusGroups.find((group) => group.status === status)?._count._all ?? 0;
+  const presentCount = statusCount("PRESENT");
+  const lateCount = statusCount("LATE");
+  const absentCount = statusCount("ABSENT");
 
   return {
     items: attendances.map(formatReportRow),

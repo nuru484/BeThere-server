@@ -117,6 +117,52 @@ describe("evaluateLiveness", () => {
     expect(v.reasons).toEqual([]);
   });
 
+  it("is not derailed by an incidental glance in the very first frame", () => {
+    // Frame 0 is grabbed the instant Start is tapped, before the user reacts,
+    // so it often carries a real yaw. Latching the turn direction from it used
+    // to invert the expected signs and make a GENUINE left-then-right pair
+    // impossible to satisfy.
+    const frames = [
+      frame({ yaw: 22 }), // incidental glance, not the prompted turn
+      frame({ yaw: -40 }), // the actual left turn
+      frame({ yaw: -38 }),
+      frame(),
+      frame({ ear: 0.1 }), // blink
+      frame(),
+      frame({ yaw: 40 }), // the actual right turn
+      frame({ yaw: 38 }),
+    ];
+    const v = evaluateLiveness(
+      frames,
+      ENROLLED,
+      ["TURN_LEFT", "BLINK", "TURN_RIGHT"],
+      0.6
+    );
+
+    expect(v.failedActions).toEqual([]);
+    expect(v.passed).toBe(true);
+  });
+
+  it("still requires a real reversal, not two turns the same way", () => {
+    const frames = [
+      frame({ yaw: 30 }),
+      frame({ yaw: 32 }),
+      frame({ ear: 0.1 }),
+      frame(),
+      frame({ yaw: 35 }),
+      frame({ yaw: 31 }),
+    ];
+    const v = evaluateLiveness(
+      frames,
+      ENROLLED,
+      ["TURN_LEFT", "BLINK", "TURN_RIGHT"],
+      0.6
+    );
+
+    expect(v.passed).toBe(false);
+    expect(v.reasons).toContain("action_not_satisfied");
+  });
+
   it("rejects a burst that is mostly one repeated still", () => {
     const still = frame({ yaw: 25, ear: 0.1, happy: 0.9 });
     const frames = [still, { ...still }, { ...still }, { ...still }, frame(), frame()];

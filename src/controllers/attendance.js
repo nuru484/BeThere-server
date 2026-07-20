@@ -2,10 +2,7 @@
 //
 // Thin HTTP adapters over the attendance services: parse/validate input,
 // call a service, shape the { message, data, meta? } envelope.
-import {
-  asyncHandler,
-  ValidationError,
-} from "../middleware/error-handler.js";
+import { asyncHandler } from "../middleware/error-handler.js";
 import { HTTP_STATUS_CODES } from "../config/constants.js";
 import { validationMiddleware } from "../validation/validation-error-handler.js";
 import {
@@ -13,18 +10,13 @@ import {
   createChallengeValidation,
   updateAttendanceValidation,
 } from "../validation/attendance-validation.js";
-import { parsePagination, paginationMeta } from "../utils/pagination.js";
+import { parsePagination } from "../utils/pagination.js";
+import { parseId } from "../utils/parse-id.js";
+import { framesOrThrow } from "../utils/liveness-frames.js";
 import * as attendanceService from "../services/attendance.service.js";
 import { assertAttendant } from "../utils/authorization.js";
 import * as attendanceQueryService from "../services/attendance-query.service.js";
-import { LIVENESS } from "../config/constants.js";
-
-const parseId = (value, message) => {
-  if (!value || isNaN(parseInt(value))) {
-    throw new ValidationError(message);
-  }
-  return parseInt(value);
-};
+import { sendPage } from "./shared.js";
 
 // Step 1: preflight (venue code + enrollment + window) + issue a randomized
 // liveness challenge, for either check-in (mode "in") or check-out ("out").
@@ -50,22 +42,11 @@ export const createAttendanceChallenge = [
   handleCreateChallenge,
 ];
 
-/** Shared frame-count guard for the multipart capture uploads. */
-const framesOrThrow = (req) => {
-  const files = req.files ?? [];
-  if (files.length < LIVENESS.MIN_FRAMES || files.length > LIVENESS.MAX_FRAMES) {
-    throw new ValidationError(
-      `Please capture between ${LIVENESS.MIN_FRAMES} and ${LIVENESS.MAX_FRAMES} frames.`
-    );
-  }
-  return files.map((file) => file.buffer);
-};
-
 // Step 2, check-in: verify the uploaded frames server-side and record attendance.
 const handleCreateAttendance = asyncHandler(async (req, res, _next) => {
   assertAttendant(req.user, "Only attendants can check in.");
   const eventId = parseId(req.params.eventId, "Valid event ID is required.");
-  const frameBuffers = framesOrThrow(req);
+  const frameBuffers = framesOrThrow(req.files);
 
   const attendance = await attendanceService.checkIn(
     parseInt(req.user.id),
@@ -93,7 +74,7 @@ export const createAttendance = [
 const handleUpdateAttendance = asyncHandler(async (req, res, _next) => {
   assertAttendant(req.user, "Only attendants can check out.");
   const eventId = parseId(req.params.eventId, "Valid event ID is required.");
-  const frameBuffers = framesOrThrow(req);
+  const frameBuffers = framesOrThrow(req.files);
 
   const attendance = await attendanceService.checkOut(
     parseInt(req.user.id),
@@ -132,18 +113,13 @@ export const getUserAttendance = asyncHandler(async (req, res) => {
       endDate: req.query.endDate,
     });
 
-  if (attendances.length === 0) {
-    return res.status(HTTP_STATUS_CODES.OK).json({
-      message: "No attendance records found for this user.",
-      data: [],
-      meta: paginationMeta(0, page, limit),
-    });
-  }
-
-  res.status(HTTP_STATUS_CODES.OK).json({
+  sendPage(res, {
     message: "User attendance successfully fetched.",
-    data: attendances,
-    meta: paginationMeta(total, page, limit),
+    emptyMessage: "No attendance records found for this user.",
+    rows: attendances,
+    total,
+    page,
+    limit,
   });
 });
 
@@ -162,18 +138,13 @@ export const getEventAttendance = asyncHandler(async (req, res, _next) => {
       endDate: req.query.endDate,
     });
 
-  if (attendances.length === 0) {
-    return res.status(HTTP_STATUS_CODES.OK).json({
-      message: "No attendance records found for this event.",
-      data: [],
-      meta: paginationMeta(0, page, limit),
-    });
-  }
-
-  res.status(HTTP_STATUS_CODES.OK).json({
+  sendPage(res, {
     message: "Event attendance successfully fetched.",
-    data: attendances,
-    meta: paginationMeta(total, page, limit),
+    emptyMessage: "No attendance records found for this event.",
+    rows: attendances,
+    total,
+    page,
+    limit,
   });
 });
 
@@ -197,17 +168,12 @@ export const getUserEventAttendance = asyncHandler(async (req, res, _next) => {
       }
     );
 
-  if (attendances.length === 0) {
-    return res.status(HTTP_STATUS_CODES.OK).json({
-      message: "No attendance records found for this user and event.",
-      data: [],
-      meta: paginationMeta(0, page, limit),
-    });
-  }
-
-  res.status(HTTP_STATUS_CODES.OK).json({
+  sendPage(res, {
     message: "User event attendance successfully fetched.",
-    data: attendances,
-    meta: paginationMeta(total, page, limit),
+    emptyMessage: "No attendance records found for this user and event.",
+    rows: attendances,
+    total,
+    page,
+    limit,
   });
 });

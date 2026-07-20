@@ -73,7 +73,7 @@ describe("POST /api/v1/auth/login (cookie-only)", () => {
       .post("/api/v1/auth/login")
       .send({ email: "gone@test.local", password: "Password123!" });
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(401);
   });
 });
 
@@ -130,6 +130,33 @@ describe("POST /api/v1/refreshToken (cookie rotation)", () => {
         winnerCookies.filter((c) => c.startsWith("bethere_accessToken="))
       );
     expect(stillValid.status).toBe(200);
+  });
+
+  it("allows the race leeway only once, then treats it as theft", async () => {
+    const user = await createAttendant({ email: "twice@test.local" });
+    const session = await sessionFor("USER", user);
+
+    await request(app)
+      .post("/api/v1/refreshToken")
+      .set("Cookie", [session.refreshCookie])
+      .expect(200);
+
+    // First racer is re-issued (two tabs is a real, benign case)...
+    await request(app)
+      .post("/api/v1/refreshToken")
+      .set("Cookie", [session.refreshCookie])
+      .expect(200);
+
+    // ...a second replay of the SAME token inside the window is not a race.
+    const third = await request(app)
+      .post("/api/v1/refreshToken")
+      .set("Cookie", [session.refreshCookie]);
+    expect(third.status).toBe(401);
+
+    // And it is treated as theft: every session for the principal is gone.
+    expect(
+      await prisma.refreshToken.count({ where: { principalId: user.id } })
+    ).toBe(0);
   });
 
   it("treats replay as theft: every session for the principal dies", async () => {

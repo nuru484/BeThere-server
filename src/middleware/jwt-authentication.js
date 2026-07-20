@@ -4,13 +4,13 @@
 // (never readable by page JavaScript), and every request re-checks the
 // principal's session epoch so revocation applies mid-token-lifetime.
 import ENV from "../config/env.js";
-import { prisma } from "../config/prisma-client.js";
 import { UnauthorizedError } from "./error-handler.js";
 import {
   getCachedTokenVersion,
   setCachedTokenVersion,
 } from "../utils/authz-cache.js";
 import { CookieManager } from "../utils/cookie-manager.js";
+import { tableFor } from "../utils/principal.js";
 import { verifyJwtToken } from "../utils/verify-jwt-token.js";
 
 const isKind = (value) => value === "ADMIN" || value === "USER";
@@ -21,8 +21,7 @@ const resolveLiveTokenVersion = async (kind, id) => {
   const cached = await getCachedTokenVersion(kind, id);
   if (cached !== undefined) return cached;
 
-  const table = kind === "ADMIN" ? prisma.admin : prisma.user;
-  const principal = await table.findFirst({
+  const principal = await tableFor(kind).findFirst({
     where: { id },
     select: { tokenVersion: true },
   });
@@ -49,7 +48,16 @@ export const authenticateJWT = async (req, res, next) => {
       ENV.ACCESS_TOKEN_SECRET
     );
 
-    if (!isKind(decodedUser.kind)) {
+    // Explicit token-type check. The same secret signs purpose-tagged tokens
+    // (2FA pending, liveness challenges); they must be rejected as SESSION
+    // credentials deliberately, not because they happen to lack a tv claim.
+    // A missing typ is tolerated only for legacy in-flight access tokens,
+    // which never carry a purpose.
+    if (
+      decodedUser.purpose !== undefined ||
+      (decodedUser.typ !== undefined && decodedUser.typ !== "access") ||
+      !isKind(decodedUser.kind)
+    ) {
       return next(
         new UnauthorizedError("Invalid access token", {
           code: "INVALID_TOKEN",

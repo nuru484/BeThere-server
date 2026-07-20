@@ -8,9 +8,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 
 // Evidence storage uploads to Cloudinary; stub it so the write-path test
-// neither hits the network nor depends on real credentials.
+// neither hits the network nor depends on real credentials. Evidence frames
+// upload as authenticated assets (public id stored) and are signed into
+// short-lived URLs at read time.
 vi.mock("../../src/utils/cloudinary.js", () => ({
   uploadImage: vi.fn().mockResolvedValue("https://cloudinary.test/frame.jpg"),
+  uploadAuthenticatedImage: vi
+    .fn()
+    .mockResolvedValue("bethere/evidence/frame-1"),
+  signedImageUrl: vi.fn(
+    (publicId) => `https://cloudinary.test/signed/${publicId}`
+  ),
   deleteImage: vi.fn().mockResolvedValue(undefined),
   imageColumnValue: (value) => (value === "" ? null : value),
 }));
@@ -80,7 +88,46 @@ describe("GET /api/v1/review/anomalies", () => {
     expect(res.body.data.length).toBe(1);
     expect(res.body.data[0].user.email).toBe("flagged@test.local");
     expect(res.body.data[0].evidence.frameUrls.length).toBe(1);
+    // Legacy rows stored the delivery URL itself; it passes through unsigned.
+    expect(res.body.data[0].evidence.frameUrls[0]).toBe(
+      "https://cloudinary.test/a.jpg"
+    );
     expect(res.body.meta.total).toBe(1);
+  });
+
+  it("signs stored public ids into delivery URLs at read time", async () => {
+    const admin = await createAdmin({ email: "rev-sign@test.local" });
+    const user = await createAttendant({ email: "signed@test.local" });
+    const { event } = await createEventWithActiveSession();
+
+    // A new-style row: the column holds the authenticated public id, never a
+    // fetchable URL.
+    const evidence = await prisma.attendanceEvidence.create({
+      data: {
+        userId: user.id,
+        eventId: event.id,
+        frameUrls: ["bethere/evidence/frame-xyz"],
+        expiresAt: new Date(Date.now() + 86_400_000),
+      },
+    });
+    await prisma.anomalyFlag.create({
+      data: {
+        userId: user.id,
+        eventId: event.id,
+        type: "LIVENESS_FAILED",
+        severity: "MEDIUM",
+        evidenceId: evidence.id,
+      },
+    });
+
+    const res = await request(app)
+      .get("/api/v1/review/anomalies")
+      .set("Cookie", [adminCookie(admin)]);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data[0].evidence.frameUrls).toEqual([
+      "https://cloudinary.test/signed/bethere/evidence/frame-xyz",
+    ]);
   });
 
   it("forbids an attendant from the review surface (403)", async () => {
@@ -190,5 +237,15 @@ describe("failed check-in writes evidence + anomaly + audit", () => {
     expect(audits).toBe(1);
     expect(evidence).toBe(1);
     expect(attendance).toBe(0);
+
+    // The stored values are authenticated public ids - a leaked DB row or API
+    // response body must never contain a standing URL to biometric frames.
+    const storedEvidence = await prisma.attendanceEvidence.findFirst({
+      where: { userId: user.id },
+    });
+    expect(storedEvidence.frameUrls.length).toBeGreaterThan(0);
+    for (const value of storedEvidence.frameUrls) {
+      expect(value).not.toMatch(/^https?:\/\//);
+    }
   });
 });

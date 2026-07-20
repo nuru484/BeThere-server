@@ -23,21 +23,28 @@ import {
   ForbiddenError,
   NotFoundError,
   UnauthorizedError,
-  ValidationError,
 } from "../middleware/error-handler.js";
 import { invalidateCachedTokenVersion } from "../utils/authz-cache.js";
-import { issueOtp, verifyOtp } from "./otp.service.js";
+import { JWT_ALGORITHMS } from "../utils/verify-jwt-token.js";
+import { tableFor } from "../utils/principal.js";
+import { TOKEN_LIFETIMES } from "../config/constants.js";
+import {
+  issueOtp,
+  verifyOtp,
+  verifyOtpAgainstNothing,
+} from "./otp.service.js";
 
 export const KIND_ADMIN = "ADMIN";
 export const KIND_USER = "USER";
 
-const REFRESH_EXPIRY_DAYS = 7;
+// Lifetimes come from the shared TOKEN_LIFETIMES definition so the cookie
+// maxAge in utils/cookie-manager.js can never drift from the JWT expiry.
+const { ACCESS_EXPIRY, REFRESH_EXPIRY_DAYS, PENDING_2FA_EXPIRY } =
+  TOKEN_LIFETIMES;
 /** Leeway in which re-presenting a just-rotated refresh token is treated as a
  * concurrent-refresh race rather than token theft. Long enough to cover
  * parallel tabs, short enough that a stolen token is still caught. */
 const REFRESH_REUSE_GRACE_MS = 15_000;
-const ACCESS_EXPIRY = "30m";
-const PENDING_2FA_EXPIRY = "5m";
 
 const hashJti = (jti) => crypto.createHash("sha256").update(jti).digest("hex");
 
@@ -45,8 +52,6 @@ const hashJti = (jti) => crypto.createHash("sha256").update(jti).digest("hex");
 // found, so the not-found path costs the same as a wrong-password path and
 // login timing can't be used to enumerate registered emails.
 const dummyHashPromise = hash("bethere-timing-equalizer", 10);
-
-const tableFor = (kind) => (kind === KIND_ADMIN ? prisma.admin : prisma.user);
 
 /** Scoped principal lookup by id (soft-deleted rows read as absent). */
 export const findPrincipal = (kind, id) =>
@@ -102,7 +107,12 @@ export async function issueSession(kind, principal) {
   });
 
   const accessToken = jwt.sign(
-    { id: principal.id, kind, role: kind, tv: principal.tokenVersion },
+    // typ marks this as a SESSION credential. Other tokens signed with the
+    // same secret (2FA pending, liveness challenges) carry a `purpose` claim
+    // instead, and authenticateJWT rejects those explicitly - their
+    // invalidity as access tokens must never rest on an incidental
+    // claim-shape difference.
+    { id: principal.id, kind, role: kind, tv: principal.tokenVersion, typ: "access" },
     ENV.ACCESS_TOKEN_SECRET,
     { expiresIn: ACCESS_EXPIRY }
   );
@@ -134,7 +144,11 @@ export async function loginWithPassword(email, password) {
   );
 
   if (!resolved || !storedHash || !passwordMatches) {
-    throw new ValidationError("Invalid Credentials");
+    // 401, the conventional status for failed authentication. The code lets
+    // the client distinguish "wrong credentials" from a session-expiry 401.
+    throw new UnauthorizedError("Invalid Credentials", {
+      code: "INVALID_CREDENTIALS",
+    });
   }
 
   const { kind, principal } = resolved;
@@ -167,7 +181,9 @@ export async function loginWithPassword(email, password) {
 export async function verifyTwoFactorLogin(pendingToken, code) {
   let decoded;
   try {
-    decoded = jwt.verify(pendingToken, ENV.ACCESS_TOKEN_SECRET);
+    decoded = jwt.verify(pendingToken, ENV.ACCESS_TOKEN_SECRET, {
+      algorithms: JWT_ALGORITHMS,
+    });
   } catch {
     throw new UnauthorizedError("Your login expired. Please sign in again.", {
       code: "2FA_PENDING_EXPIRED",
@@ -219,15 +235,25 @@ export async function requestOtpLogin(identifier) {
     // tolerateCooldown: a 429 for a real account against a 200 for an unknown
     // one is the same oracle by another route - two probes would separate them.
     // Inside the window the outstanding code simply stands.
+    // deferDelivery: the SMS/email goes out fire-and-forget, so the response
+    // does not take a provider round-trip longer for a known identifier.
     await issueOtp({
       kind: KIND_USER,
       principal: user,
       purpose: "LOGIN",
       channel,
       tolerateCooldown: true,
+      deferDelivery: true,
     });
   }
 
+  // ALWAYS the format-derived channel, never the issued one. A REUSED code may
+  // sit on the other channel (they typed their phone a minute ago and their
+  // email now), but reporting that answers "SMS" to a typed email address -
+  // which proves both that the account exists and that it has a phone. An
+  // unknown identifier can only ever echo the format, so the known answer must
+  // too. The cost is the rare "check your inbox" for a code sitting in their
+  // texts; a second request after the 60s cooldown puts it where they were told.
   return { channel };
 }
 
@@ -236,6 +262,13 @@ export async function verifyOtpLogin(identifier, code) {
     where: { OR: [{ phone: identifier }, { email: identifier }] },
   });
   if (!user) {
+    // Unknown identifier: pay the same DB-read + hash-compare cost a wrong
+    // code pays and fail with the identical error, so this endpoint cannot
+    // confirm that an account exists. It always throws today; the explicit
+    // throw after it makes that a property of THIS function, so a future early
+    // return there cannot fall through to verifyOtp with user === null and
+    // 500 an unauthenticated endpoint.
+    await verifyOtpAgainstNothing({ kind: KIND_USER, purpose: "LOGIN", code });
     throw new BadRequestError("Invalid or expired code. Please try again.");
   }
 
@@ -290,7 +323,9 @@ export async function demoLogin(role) {
 export async function rotateRefreshToken(token) {
   let decoded;
   try {
-    decoded = jwt.verify(token, ENV.REFRESH_TOKEN_SECRET);
+    decoded = jwt.verify(token, ENV.REFRESH_TOKEN_SECRET, {
+      algorithms: JWT_ALGORITHMS,
+    });
   } catch (error) {
     if (error.name === "TokenExpiredError") {
       throw new UnauthorizedError("Refresh token expired. Please log in again.", {
@@ -332,6 +367,24 @@ export async function rotateRefreshToken(token) {
         sinceConsumed <= REFRESH_REUSE_GRACE_MS &&
         known.expiresAt.getTime() > Date.now()
       ) {
+        // Claim the leeway ATOMICALLY and only once. Without this bound a token
+        // replayed repeatedly inside the window would mint an independent
+        // 7-day session on every call, and because the original is never
+        // presented again afterwards the theft response would never fire. One
+        // re-issue covers the real case (two tabs); a second is treated as
+        // theft below.
+        const claimed = await prisma.refreshToken.updateMany({
+          where: { jtiHash, reusedAt: null },
+          data: { reusedAt: new Date() },
+        });
+
+        if (claimed.count === 0) {
+          await revokeAllSessions(decoded.kind, decoded.id);
+          throw new UnauthorizedError("Invalid refresh token", {
+            code: "INVALID_TOKEN",
+          });
+        }
+
         const principal = await findPrincipal(decoded.kind, decoded.id);
         if (!principal) {
           throw new UnauthorizedError(
@@ -378,7 +431,9 @@ export async function cleanupExpiredRefreshTokens() {
 /** Consumes the presented refresh token (idempotent, never throws). */
 export async function logout(token) {
   try {
-    const decoded = jwt.verify(token, ENV.REFRESH_TOKEN_SECRET);
+    const decoded = jwt.verify(token, ENV.REFRESH_TOKEN_SECRET, {
+      algorithms: JWT_ALGORITHMS,
+    });
     if (decoded?.jti) {
       // DELETE rather than mark consumed. A consumed row is indistinguishable
       // from one retired by normal rotation, and the rotation-race leeway in
@@ -397,12 +452,29 @@ export async function logout(token) {
 /**
  * Full session revocation for a principal: epoch bump + refresh purge. Used
  * by password change/reset, 2FA toggles, deletion, and theft response.
+ * Accepts a transaction client so callers can make the revocation atomic
+ * with the mutation that demanded it (e.g. account deletion).
+ *
+ * The cached epoch is dropped only when this runs OUTSIDE a transaction.
+ * Invalidating mid-transaction is worse than not invalidating at all: a
+ * concurrent request misses the cache, reads the still-UNCOMMITTED old
+ * tokenVersion, and repopulates the entry with a fresh 60s TTL - so a revoked
+ * access token keeps working for up to a minute AFTER the commit. Callers
+ * passing a tx must call invalidateRevokedSessionsCache once it commits.
  */
-export async function revokeAllSessions(kind, principalId) {
-  await tableFor(kind).update({
+export async function revokeAllSessions(kind, principalId, db = prisma) {
+  await tableFor(kind, db).update({
     where: { id: principalId },
     data: { tokenVersion: { increment: 1 } },
   });
-  await prisma.refreshToken.deleteMany({ where: { kind, principalId } });
+  await db.refreshToken.deleteMany({ where: { kind, principalId } });
+  if (db === prisma) invalidateRevokedSessionsCache(kind, principalId);
+}
+
+/**
+ * Drops the cached session epoch after a revocation that ran inside a
+ * transaction. Call it once the transaction has COMMITTED.
+ */
+export function invalidateRevokedSessionsCache(kind, principalId) {
   invalidateCachedTokenVersion(kind, principalId);
 }

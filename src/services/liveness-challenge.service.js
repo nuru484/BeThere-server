@@ -12,6 +12,7 @@ import ENV from "../config/env.js";
 import { prisma } from "../config/prisma-client.js";
 import { UnauthorizedError } from "../middleware/error-handler.js";
 import { LIVENESS } from "../config/constants.js";
+import { JWT_ALGORITHMS } from "../utils/verify-jwt-token.js";
 
 const PURPOSE = "LIVENESS_CHALLENGE";
 
@@ -64,7 +65,9 @@ export async function consumeChallenge({
 }) {
   let decoded;
   try {
-    decoded = jwt.verify(token, ENV.ACCESS_TOKEN_SECRET);
+    decoded = jwt.verify(token, ENV.ACCESS_TOKEN_SECRET, {
+      algorithms: JWT_ALGORITHMS,
+    });
   } catch {
     throw new UnauthorizedError(
       "Your check-in session expired. Please start the scan again.",

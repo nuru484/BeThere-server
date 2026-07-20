@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# Superseded runs (force-pushes to the same ref) are cancelled instead of
+# burning runner minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -40,4 +46,19 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      # Schema drift gate: a schema.prisma edit committed without a migration
+      # fails here instead of surfacing at deploy time.
+      - name: Check migrations match schema
+        run: npx prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code
+        env:
+          SHADOW_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bethere_drift_check
       - run: npm test
+
+  # The image must build on every change: the entrypoint runs the Prisma CLI
+  # and the runtime stage's dependency set can silently rot otherwise.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t bethere-server:ci .

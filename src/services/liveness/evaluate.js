@@ -17,21 +17,22 @@ import { LIVENESS } from "../../config/constants.js";
 const IDENTICAL_FRAME_DISTANCE = 1e-6;
 
 function hasDuplicateFrames(frames) {
-  let withTwin = 0;
+  const hasTwin = new Array(frames.length).fill(false);
 
+  // Each unordered pair is compared once; a match marks both members.
   for (let i = 0; i < frames.length; i++) {
-    for (let j = 0; j < frames.length; j++) {
-      if (i === j) continue;
+    for (let j = i + 1; j < frames.length; j++) {
       const distance = euclideanDistance(
         frames[i].descriptor,
         frames[j].descriptor
       );
       if (distance <= IDENTICAL_FRAME_DISTANCE) {
-        withTwin++;
-        break;
+        hasTwin[i] = true;
+        hasTwin[j] = true;
       }
     }
   }
+  const withTwin = hasTwin.filter(Boolean).length;
 
   // Only a MAJORITY of repeated images is called replay. A camera that stalls
   // and emits one duplicate frame must not fail an otherwise genuine capture.
@@ -52,7 +53,8 @@ const isTurn = (action) => action === "TURN_LEFT" || action === "TURN_RIGHT";
 function proveActionsInOrder(frames, actions) {
   const failed = [];
   let cursor = 0;
-  let firstTurnSign = 0;
+  const turnActions = actions.filter(isTurn);
+  const isTurnFrame = (f) => Math.abs(f.yaw) >= LIVENESS.YAW_TURN_DEGREES;
 
   for (const action of actions) {
     if (action === "BLINK") {
@@ -98,20 +100,27 @@ function proveActionsInOrder(frames, actions) {
     if (isTurn(action)) {
       let at = -1;
       for (let i = cursor; i < frames.length; i++) {
-        const yaw = frames[i].yaw;
-        if (Math.abs(yaw) < LIVENESS.YAW_TURN_DEGREES) continue;
-        // A second turn only counts if it reverses the first one.
-        if (firstTurnSign !== 0 && Math.sign(yaw) === firstTurnSign) continue;
-        at = i;
-        break;
+        if (isTurnFrame(frames[i])) {
+          at = i;
+          break;
+        }
       }
-      if (at === -1) {
-        failed.push(action);
-      } else {
-        if (firstTurnSign === 0) firstTurnSign = Math.sign(frames[at].yaw);
-        cursor = at + 1;
-      }
+      if (at === -1) failed.push(action);
+      else cursor = at + 1;
     }
+  }
+
+  // A PAIR of turns must go opposite ways somewhere in the burst - that is the
+  // part no single still can fake. It is checked across the whole burst rather
+  // than latched from the first qualifying frame: the very first frame is
+  // grabbed the instant capture starts, before the user has reacted, so an
+  // incidental glance would otherwise lock the direction and make a genuine
+  // left-then-right impossible to satisfy.
+  if (turnActions.length >= 2) {
+    const turned = frames.filter(isTurnFrame);
+    const reversed =
+      turned.some((f) => f.yaw > 0) && turned.some((f) => f.yaw < 0);
+    if (!reversed) failed.push(turnActions[turnActions.length - 1]);
   }
 
   return failed;

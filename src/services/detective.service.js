@@ -5,11 +5,47 @@
 // evidence they reference. Admin-only; these are how a manager actually
 // reviews the trail the system collects, closing the "write-only" gap.
 import { prisma } from "../config/prisma-client.js";
-import { NotFoundError } from "../middleware/error-handler.js";
-import { recordAudit } from "./audit.service.js";
+import {
+  NotFoundError,
+  ValidationError,
+} from "../middleware/error-handler.js";
+import { auditLogWrite } from "./audit.service.js";
+import {
+  parseSearchFilter,
+} from "./attendance-query.service.js";
+import { toClientFrameUrl } from "./attendance-evidence.service.js";
+
+const ANOMALY_TYPES = [
+  "DUPLICATE_DESCRIPTOR",
+  "LIVENESS_FAILED",
+  "REPLAY_SUSPECTED",
+  "RAPID_ATTEMPTS",
+];
+
+/** Validates the anomaly-type filter against the enum so a bad value is a
+ * clean 400 field error, not a PrismaClientValidationError. */
+function parseAnomalyTypeFilter(type) {
+  const value = parseSearchFilter(type);
+  if (value === undefined) return undefined;
+  const upper = value.toUpperCase();
+  if (!ANOMALY_TYPES.includes(upper)) {
+    throw new ValidationError(
+      `Invalid anomaly type. Must be one of: ${ANOMALY_TYPES.join(", ")}`
+    );
+  }
+  return upper;
+}
 
 /** Paginated audit log, newest first, with optional action/actorKind filters. */
-export async function listAuditLogs({ skip, limit, action, actorKind }) {
+export async function listAuditLogs({
+  skip,
+  limit,
+  action: rawAction,
+  actorKind: rawActorKind,
+}) {
+  // Scalar coercion: `?action[]=x` must 400, never reach Prisma as an array.
+  const action = parseSearchFilter(rawAction);
+  const actorKind = parseSearchFilter(rawActorKind);
   const where = {};
   if (action) where.action = action;
   if (actorKind) where.actorKind = actorKind;
@@ -33,7 +69,8 @@ export async function listAuditLogs({ skip, limit, action, actorKind }) {
  * fields and the retained evidence frames, so the UI can show who/what/where
  * without extra round-trips.
  */
-export async function listAnomalies({ skip, limit, resolved, type }) {
+export async function listAnomalies({ skip, limit, resolved, type: rawType }) {
+  const type = parseAnomalyTypeFilter(rawType);
   const where = {};
   if (resolved === "true") where.resolvedAt = { not: null };
   else if (resolved === "false") where.resolvedAt = null;
@@ -73,7 +110,20 @@ export async function listAnomalies({ skip, limit, resolved, type }) {
   ]);
 
   const userById = new Map(users.map((u) => [u.id, u]));
-  const evidenceById = new Map(evidence.map((e) => [e.id, e]));
+  // Stored frame values are public ids (or legacy URLs); sign them into
+  // short-lived URLs here so the response never carries standing access to
+  // biometric frames.
+  const evidenceById = new Map(
+    evidence.map((e) => [
+      e.id,
+      {
+        ...e,
+        frameUrls: (Array.isArray(e.frameUrls) ? e.frameUrls : []).map(
+          toClientFrameUrl
+        ),
+      },
+    ])
+  );
 
   const anomalies = rows.map((row) => ({
     id: row.id,
@@ -98,19 +148,22 @@ export async function resolveAnomaly(anomalyId, actor, ip) {
     throw new NotFoundError("Anomaly not found.");
   }
 
-  const updated = await prisma.anomalyFlag.update({
-    where: { id: anomalyId },
-    data: { resolvedAt: new Date() },
-  });
-
-  await recordAudit({
-    actorKind: actor?.kind ?? "ADMIN",
-    actorId: actor ? parseInt(actor.id) : null,
-    action: "ANOMALY_RESOLVED",
-    targetType: "AnomalyFlag",
-    targetId: anomalyId,
-    ip,
-  });
+  // One transaction: the resolution and its audit entry land together, so a
+  // crash cannot mark an anomaly reviewed without a trace of who reviewed it.
+  const [updated] = await prisma.$transaction([
+    prisma.anomalyFlag.update({
+      where: { id: anomalyId },
+      data: { resolvedAt: new Date() },
+    }),
+    auditLogWrite({
+      actorKind: actor?.kind ?? "ADMIN",
+      actorId: actor ? parseInt(actor.id) : null,
+      action: "ANOMALY_RESOLVED",
+      targetType: "AnomalyFlag",
+      targetId: anomalyId,
+      ip,
+    }),
+  ]);
 
   return updated;
 }

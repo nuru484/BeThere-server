@@ -1,5 +1,19 @@
 export const BCRYPT_SALT_ROUNDS = 10;
 
+// Session token lifetimes - the SINGLE definition. The auth service signs
+// JWTs with the string/day forms; the cookie manager uses the derived ms
+// values. Cookie lifetime must match token lifetime: a cookie that outlives
+// its token sends dead credentials (spurious 401s), one that dies earlier
+// drops a still-valid session. Change these together, here only.
+export const TOKEN_LIFETIMES = {
+  ACCESS_EXPIRY: "30m",
+  ACCESS_MAX_AGE_MS: 30 * 60 * 1000,
+  REFRESH_EXPIRY_DAYS: 7,
+  REFRESH_MAX_AGE_MS: 7 * 24 * 60 * 60 * 1000,
+  PENDING_2FA_EXPIRY: "5m",
+  PENDING_2FA_MAX_AGE_MS: 5 * 60 * 1000,
+};
+
 export const HTTP_STATUS_CODES = {
   OK: 200,
   CREATED: 201,
@@ -25,8 +39,11 @@ export const LIVENESS = {
   ACTIONS: ["TURN_LEFT", "TURN_RIGHT", "BLINK", "SMILE"],
   // How many actions make up one challenge (drawn without repetition).
   ACTIONS_PER_CHALLENGE: 3,
-  // Challenge lifetime; short so a leaked token is near-useless.
-  CHALLENGE_TTL_MS: 60 * 1000,
+  // Challenge lifetime; short so a leaked token is near-useless, but long
+  // enough that performing three prompted actions and uploading a multi-frame
+  // burst on a slow mobile network does not loop on CHALLENGE_EXPIRED (the
+  // venue-code skew was widened for the same real-world flow).
+  CHALLENGE_TTL_MS: 120 * 1000,
   // Frame bounds for one capture upload.
   MIN_FRAMES: 6,
   MAX_FRAMES: 16,
@@ -65,6 +82,40 @@ export const VENUE_CODE = {
 
 // How long retained evidence frames live before the retention job purges them.
 export const EVIDENCE_RETENTION_DAYS = 30;
+// How many expired evidence rows one retention sweep processes per batch, and
+// the per-run ceiling - each row costs Cloudinary round-trips, so a backlog
+// is drained across sweeps instead of in one unbounded run.
+export const EVIDENCE_PURGE_BATCH = 200;
+export const EVIDENCE_PURGE_MAX_PER_RUN = 2000;
 // Dormant enrolled templates are purged after this many days without a
 // check-in (biometric data minimization).
 export const TEMPLATE_DORMANT_DAYS = 365;
+// Append-only bookkeeping still needs a horizon: audit entries and RESOLVED
+// anomaly flags older than this are trimmed by the retention sweep.
+export const AUDIT_LOG_RETENTION_DAYS = 180;
+export const ANOMALY_RESOLVED_RETENTION_DAYS = 180;
+
+// Check-ins within this window after the session opens count PRESENT; later
+// ones count LATE.
+export const ATTENDANCE_LATE_GRACE_MS = 60 * 60 * 1000;
+
+// Session finalization (absence marking + auto check-out).
+export const SESSION_FINALIZER = {
+  // How long after the session's end time the finalizer waits before closing
+  // the books, so a check-out racing the deadline is never overwritten.
+  GRACE_MS: 30 * 60 * 1000,
+  // Only sessions whose day is within this lookback get ABSENT rows and auto
+  // check-outs. Older sessions (e.g. history predating this feature) are
+  // stamped finalized WITHOUT fabricating retroactive absence data.
+  LOOKBACK_DAYS: 7,
+  // Sweep cadence (BullMQ repeatable cron pattern): every 10 minutes.
+  CRON_PATTERN: "*/10 * * * *",
+};
+
+// A recurring event's occurrence must finish before the next one starts. With
+// recurrenceInterval < durationDays the next occurrence's first day is a day
+// the current occurrence already owns a Session row for, so session
+// generation stalls on it permanently. Shared by the request validator and
+// the service's merged-value check.
+export const RECURRENCE_INTERVAL_MESSAGE =
+  "recurrenceInterval must be at least durationDays, so each occurrence ends before the next one starts.";

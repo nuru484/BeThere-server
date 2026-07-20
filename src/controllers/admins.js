@@ -1,5 +1,5 @@
 // src/controllers/admins.js
-import { asyncHandler, ValidationError } from "../middleware/error-handler.js";
+import { asyncHandler } from "../middleware/error-handler.js";
 import { HTTP_STATUS_CODES } from "../config/constants.js";
 import { validationMiddleware } from "../validation/validation-error-handler.js";
 import {
@@ -8,14 +8,8 @@ import {
   updateUserProfileValidation,
 } from "../validation/users-validation.js";
 import { parsePagination, paginationMeta } from "../utils/pagination.js";
+import { parseId } from "../utils/parse-id.js";
 import * as adminService from "../services/admin.service.js";
-
-const parseAdminId = (adminId) => {
-  if (!adminId || isNaN(parseInt(adminId))) {
-    throw new ValidationError("Valid admin ID is required.");
-  }
-  return parseInt(adminId);
-};
 
 const handleCreateAdmin = asyncHandler(async (req, res, _next) => {
   const data = await adminService.createAdmin(req.body);
@@ -42,7 +36,7 @@ export const getAllAdmins = asyncHandler(async (req, res, _next) => {
 });
 
 export const getAdminById = asyncHandler(async (req, res, _next) => {
-  const targetAdminId = parseAdminId(req.params.adminId);
+  const targetAdminId = parseId(req.params.adminId, "Valid admin ID is required.");
 
   const data = await adminService.getAdminById(targetAdminId);
 
@@ -53,7 +47,7 @@ export const getAdminById = asyncHandler(async (req, res, _next) => {
 });
 
 const handleUpdateAdminProfile = asyncHandler(async (req, res, _next) => {
-  const targetAdminId = parseAdminId(req.params.adminId);
+  const targetAdminId = parseId(req.params.adminId, "Valid admin ID is required.");
 
   const data = await adminService.updateAdminProfile(
     req.user,
@@ -76,7 +70,7 @@ export const updateAdminProfile = [
 
 export const updateAdminProfilePicture = asyncHandler(
   async (req, res, _next) => {
-    const targetAdminId = parseAdminId(req.params.adminId);
+    const targetAdminId = parseId(req.params.adminId, "Valid admin ID is required.");
 
     const data = await adminService.updateAdminProfilePicture(
       req.user,
@@ -92,7 +86,7 @@ export const updateAdminProfilePicture = asyncHandler(
 );
 
 export const deleteAdmin = asyncHandler(async (req, res, _next) => {
-  const targetAdminId = parseAdminId(req.params.adminId);
+  const targetAdminId = parseId(req.params.adminId, "Valid admin ID is required.");
 
   await adminService.deleteAdmin(req.user, targetAdminId);
 

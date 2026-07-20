@@ -13,6 +13,7 @@
 // with "Invalid access token". Unique names make that collision impossible and
 // let any stale broad-domain cookie be ignored.
 import ENV from "../config/env.js";
+import { TOKEN_LIFETIMES } from "../config/constants.js";
 
 export const COOKIE_NAMES = {
   access: "bethere_accessToken",
@@ -27,9 +28,13 @@ const base = {
   ...(ENV.COOKIE_DOMAIN ? { domain: ENV.COOKIE_DOMAIN } : {}),
 };
 
-const ACCESS_MAX_AGE_MS = 30 * 60 * 1000;
-const REFRESH_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const PENDING_2FA_MAX_AGE_MS = 5 * 60 * 1000;
+// Cookie lifetime must match the corresponding JWT lifetime, so both come
+// from the shared TOKEN_LIFETIMES definition (see config/constants.js).
+const {
+  ACCESS_MAX_AGE_MS,
+  REFRESH_MAX_AGE_MS,
+  PENDING_2FA_MAX_AGE_MS,
+} = TOKEN_LIFETIMES;
 
 export const CookieManager = {
   setAuthCookies(res, { accessToken, refreshToken }) {

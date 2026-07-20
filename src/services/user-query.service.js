@@ -6,6 +6,7 @@
 import { prisma } from "../config/prisma-client.js";
 import { NotFoundError } from "../middleware/error-handler.js";
 import { assertSelfOrAdmin } from "../utils/authorization.js";
+import { parseSearchFilter } from "./attendance-query.service.js";
 import { toSafeUser } from "./auth.service.js";
 import { USER_SELECT } from "./user.service.js";
 
@@ -30,9 +31,12 @@ export async function getUserById(actor, targetUserId) {
 }
 
 /** Admin list of attendants with name/email/phone search. */
-export async function listUsers({ skip, limit, search }) {
+export async function listUsers({ skip, limit, search: rawSearch }) {
   const whereClause = {};
 
+  // Coerced like every other list surface: `?search[]=x` arrives as an array
+  // and must 400 as a bad filter, never reach Prisma as a non-string.
+  const search = parseSearchFilter(rawSearch);
   if (search) {
     whereClause.OR = [
       { firstName: { contains: search, mode: "insensitive" } },

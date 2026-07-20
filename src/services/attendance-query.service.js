@@ -8,6 +8,7 @@ import {
   ValidationError,
 } from "../middleware/error-handler.js";
 import { assertSelfOrAdmin } from "../utils/authorization.js";
+import { eventDayRange } from "../utils/time-context.js";
 
 /** Every attendance list row carries a minimal user and the full session chain. */
 export const ATTENDANCE_LIST_INCLUDE = {
@@ -61,19 +62,19 @@ export function parseSearchFilter(search) {
   return trimmed === "" ? undefined : trimmed;
 }
 
-/** Check-in time range filter; the end date is inclusive (end of that day). */
+/**
+ * Check-in time range filter; the end date is inclusive (end of that day).
+ * Day boundaries are VENUE-timezone instants (the previous version computed
+ * "end of day" on the server's local clock, so filters were off by the
+ * host/venue offset at both edges).
+ */
 export function checkInTimeRange(startDate, endDate) {
   if (!startDate && !endDate) return undefined;
 
+  const { start, end } = eventDayRange(startDate, endDate);
   const range = {};
-  if (startDate) {
-    range.gte = new Date(startDate);
-  }
-  if (endDate) {
-    const endDateTime = new Date(endDate);
-    endDateTime.setHours(23, 59, 59, 999);
-    range.lte = endDateTime;
-  }
+  if (start) range.gte = start;
+  if (end) range.lte = end;
   return range;
 }
 
@@ -144,8 +145,10 @@ async function findAttendancePage(whereClause, { skip, limit }) {
       where: whereClause,
       skip,
       take: limit,
+      // nulls last: ABSENT rows have no check-in time, and Postgres would
+      // otherwise float them to the top of every DESC-ordered list.
       orderBy: {
-        checkInTime: "desc",
+        checkInTime: { sort: "desc", nulls: "last" },
       },
       include: ATTENDANCE_LIST_INCLUDE,
     }),

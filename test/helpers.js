@@ -7,6 +7,7 @@ import { prisma } from "../src/config/prisma-client.js";
 import { issueSession } from "../src/services/auth.service.js";
 import { COOKIE_NAMES } from "../src/utils/cookie-manager.js";
 import { upcomingCodes } from "../src/services/venue-code.service.js";
+import { eventCalendarDay } from "../src/utils/time-context.js";
 
 /** The current valid rotating venue code for a known secret (test helper). */
 export const venueCodeFor = (venueSecret) => upcomingCodes(venueSecret)[0].code;
@@ -101,11 +102,14 @@ export async function createEventWithActiveSession() {
     data: { name: "Test Hall" },
   });
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  // Session dates are DATE-ONLY values pinned to the venue's calendar day -
+  // exactly what the worker writes and what resolveActiveSession looks up.
+  // Building them from the SERVER's local midnight instead made the whole
+  // suite pass only on a UTC machine.
+  const today = eventCalendarDay(new Date());
 
   const endOfToday = new Date(today);
-  endOfToday.setHours(23, 59, 0, 0);
+  endOfToday.setUTCHours(23, 59, 0, 0);
 
   // venueSecret is set here (the service sets it on real creates); the global
   // omit hides it from query results, so it is returned separately for tests

@@ -5,6 +5,7 @@
 // worker starts.
 import { execFileSync } from "node:child_process";
 import pg from "pg";
+import { Redis } from "ioredis";
 
 export default async function globalSetup() {
   const testUrl = process.env.DATABASE_URL;
@@ -12,6 +13,29 @@ export default async function globalSetup() {
     throw new Error(
       "Refusing to run: tests must target the bethere_test database"
     );
+  }
+
+  // Fail fast with a readable message when Redis is down: event-creating
+  // tests enqueue BullMQ jobs, and without this preflight they hang until
+  // the test timeout with an opaque error.
+  const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
+  const redis = new Redis(redisUrl, {
+    lazyConnect: true,
+    maxRetriesPerRequest: 0,
+    connectTimeout: 3000,
+    retryStrategy: () => null,
+  });
+  try {
+    await redis.connect();
+    await redis.ping();
+  } catch (error) {
+    throw new Error(
+      `Redis is not reachable at ${redisUrl} - the test suite needs a ` +
+        `running Redis (BullMQ queues). Start it, or set REDIS_URL. ` +
+        `(${error.message})`
+    );
+  } finally {
+    redis.disconnect();
   }
 
   // Connect to the maintenance DB to create bethere_test when absent.

@@ -13,7 +13,7 @@ vi.mock("../../src/utils/send-sms.js", () => ({
     sent.sms.push({ phone, message });
   }),
 }));
-vi.mock("../../src/utils/sendMail.js", () => ({
+vi.mock("../../src/utils/send-mail.js", () => ({
   default: vi.fn(async ({ email, text }) => {
     sent.mail.push({ email, text });
   }),
@@ -219,6 +219,65 @@ describe("passwordless OTP login (attendants, phone-first)", () => {
     // The code really did go out on the channel that was reported.
     expect(sent.mail).toHaveLength(1);
     expect(sent.sms).toHaveLength(0);
+  });
+
+  it("answers the format-derived channel even when the reused code went out by SMS", async () => {
+    // The leak: a code issued to the phone a moment ago is REUSED when the
+    // email is typed next (the 60s cooldown). Reporting where that code
+    // actually went answered "SMS" to a typed email address, proving both
+    // that the account exists and that it has a phone on file. An unknown
+    // identifier can only ever echo the format, so the known answer must too.
+    await createAttendant({
+      email: "reuse@test.local",
+      phone: "+233540000034",
+    });
+
+    // First request pins an SMS-delivered code inside the resend cooldown.
+    const bySms = await request(app)
+      .post("/api/v1/auth/otp/request")
+      .send({ identifier: "+233540000034" });
+    expect(bySms.body.data.channel).toBe("SMS");
+
+    const known = await request(app)
+      .post("/api/v1/auth/otp/request")
+      .send({ identifier: "reuse@test.local" });
+    const unknown = await request(app)
+      .post("/api/v1/auth/otp/request")
+      .send({ identifier: "nobody-at-all@test.local" });
+
+    expect(known.status).toBe(unknown.status);
+    expect(known.body).toEqual(unknown.body);
+    expect(known.body.data.channel).toBe("EMAIL");
+    // The reused code is still the SMS one - only the ANSWER is format-derived.
+    expect(sent.mail).toHaveLength(0);
+  });
+
+  it("verify answers identically for an unknown identifier and a wrong code", async () => {
+    await createAttendant({
+      email: "vknown@test.local",
+      phone: "+233540000033",
+    });
+    await request(app)
+      .post("/api/v1/auth/otp/request")
+      .send({ identifier: "+233540000033" });
+
+    const wrongCode = await request(app)
+      .post("/api/v1/auth/otp/verify")
+      .send({ identifier: "+233540000033", code: "000000" });
+    const unknown = await request(app)
+      .post("/api/v1/auth/otp/verify")
+      .send({ identifier: "nobody-here@test.local", code: "000000" });
+
+    expect(wrongCode.status).toBe(400);
+    expect(unknown.status).toBe(400);
+    // requestId/errorId are fresh per REQUEST (two wrong-code probes differ in
+    // them too), so they carry no account signal; everything else must be
+    // byte-identical or the endpoint confirms which identifiers exist.
+    const scrub = ({ requestId: _rid, errorId: _eid, ...rest }) => rest;
+    expect(scrub(unknown.body)).toEqual(scrub(wrongCode.body));
+    expect(Object.keys(unknown.body).sort()).toEqual(
+      Object.keys(wrongCode.body).sort()
+    );
   });
 
   it("a code cannot be used twice", async () => {

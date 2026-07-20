@@ -3,8 +3,8 @@
 // Single import surface for the auth flows: re-exports the core service and
 // adds the 2FA management operations that compose OTP verification with the
 // principal tables.
-import { prisma } from "../config/prisma-client.js";
 import { issueOtp, verifyOtp } from "./otp.service.js";
+import { tableFor } from "../utils/principal.js";
 import { toSafeUser } from "./auth.service.js";
 
 export {
@@ -35,8 +35,7 @@ export const issueOtpForPrincipal = (kind, principal, purpose) =>
 export async function setTwoFactorEnabled(kind, principalId, code, enabled) {
   await verifyOtp({ kind, principalId, purpose: "TWO_FACTOR", code });
 
-  const table = kind === "ADMIN" ? prisma.admin : prisma.user;
-  const updated = await table.update({
+  const updated = await tableFor(kind).update({
     where: { id: principalId },
     data: { twoFactorEnabled: enabled },
   });

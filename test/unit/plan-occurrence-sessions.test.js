@@ -5,9 +5,13 @@
 // check-in for the whole span - a five-day conference recorded one day per
 // attendee and refused the rest with "already checked in".
 import { describe, expect, it } from "vitest";
-import { planOccurrenceSessions } from "../../src/jobs/session-worker.js";
+import { planOccurrenceSessions } from "../../src/services/session-planning.js";
 
-const day = (iso) => new Date(`${iso}T00:00:00`);
+// UTC midnight: session rows are keyed on a UTC-midnight startDate (see
+// utils/time-context.js), and startDate is half of @@unique([eventId,
+// startDate]) - an off-midnight value would let the same calendar day exist
+// twice for one event.
+const day = (iso) => new Date(`${iso}T00:00:00.000Z`);
 
 const plan = (over = {}) =>
   planOccurrenceSessions({
@@ -25,8 +29,8 @@ describe("planOccurrenceSessions", () => {
 
     expect(rows).toHaveLength(1);
     expect(rows[0].startDate).toEqual(rows[0].endDate);
-    expect(rows[0].startTime.getHours()).toBe(9);
-    expect(rows[0].endTime.getHours()).toBe(17);
+    expect(rows[0].startTime.getUTCHours()).toBe(9);
+    expect(rows[0].endTime.getUTCHours()).toBe(17);
   });
 
   it("plans one row per day across a multi-day event", () => {
@@ -34,11 +38,11 @@ describe("planOccurrenceSessions", () => {
 
     expect(rows).toHaveLength(5);
     // Consecutive days, each self-contained so attendance is per day.
-    expect(rows.map((r) => r.startDate.getDate())).toEqual([20, 21, 22, 23, 24]);
+    expect(rows.map((r) => r.startDate.getUTCDate())).toEqual([20, 21, 22, 23, 24]);
     rows.forEach((row) => {
       expect(row.startDate).toEqual(row.endDate);
-      expect(row.startTime.getHours()).toBe(9);
-      expect(row.endTime.getHours()).toBe(17);
+      expect(row.startTime.getUTCHours()).toBe(9);
+      expect(row.endTime.getUTCHours()).toBe(17);
     });
   });
 
@@ -46,10 +50,10 @@ describe("planOccurrenceSessions", () => {
     const rows = plan({ durationDays: 3, startTime: "08:30", endTime: "12:45" });
 
     rows.forEach((row) => {
-      expect([row.startTime.getHours(), row.startTime.getMinutes()]).toEqual([
+      expect([row.startTime.getUTCHours(), row.startTime.getUTCMinutes()]).toEqual([
         8, 30,
       ]);
-      expect([row.endTime.getHours(), row.endTime.getMinutes()]).toEqual([
+      expect([row.endTime.getUTCHours(), row.endTime.getUTCMinutes()]).toEqual([
         12, 45,
       ]);
     });
@@ -59,11 +63,45 @@ describe("planOccurrenceSessions", () => {
     const rows = plan({ durationDays: 5, eventEndDate: day("2026-07-22") });
 
     expect(rows).toHaveLength(3);
-    expect(rows.at(-1).startDate.getDate()).toBe(22);
+    expect(rows.at(-1).startDate.getUTCDate()).toBe(22);
   });
 
   it("treats a missing or zero duration as a single day", () => {
     expect(plan({ durationDays: 0 })).toHaveLength(1);
     expect(plan({ durationDays: undefined })).toHaveLength(1);
   });
+
+  it("keeps every day at UTC midnight across a local DST transition", () => {
+    // date-fns addDays and Date#setHours both walk the SERVER's LOCAL
+    // calendar, so on a host in a DST-observing zone an occurrence spanning
+    // the transition produced a startDate of 23:00 or 01:00 UTC - a second
+    // row for a calendar day that already had one.
+    const originalTz = process.env.TZ;
+    process.env.TZ = "America/New_York"; // DST starts 2026-03-08
+    try {
+      const rows = planOccurrenceSessions({
+        eventId: 1,
+        occurrenceStart: day("2026-03-06"),
+        durationDays: 5,
+        startTime: "09:00",
+        endTime: "17:00",
+      });
+
+      expect(rows.map((r) => r.startDate.toISOString())).toEqual([
+        "2026-03-06T00:00:00.000Z",
+        "2026-03-07T00:00:00.000Z",
+        "2026-03-08T00:00:00.000Z",
+        "2026-03-09T00:00:00.000Z",
+        "2026-03-10T00:00:00.000Z",
+      ]);
+      rows.forEach((row) => {
+        expect(row.startTime.getUTCHours()).toBe(9);
+        expect(row.endTime.getUTCHours()).toBe(17);
+      });
+    } finally {
+      if (originalTz === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTz;
+    }
+  });
 });
+

@@ -110,6 +110,11 @@ model RefreshToken {
   jtiHash     String    @unique
   expiresAt   DateTime
   consumedAt  DateTime?
+  // Stamped the first time an already-consumed token is honoured under the
+  // rotation-race leeway. Bounds that leeway to ONE re-issue, so a genuine
+  // two-tab race still works while a token replayed repeatedly inside the
+  // window is caught as theft instead of minting a session each time.
+  reusedAt    DateTime?
 
   createdAt DateTime @default(now())
 
@@ -179,6 +184,11 @@ model Session {
   startTime DateTime
   endTime   DateTime
 
+  // Stamped by the session-finalizer job once the day's window (plus grace)
+  // has closed: ABSENT rows are written and open attendances auto-checked-out
+  // exactly once per session. Null = not yet finalized.
+  finalizedAt DateTime?
+
   event       Event        @relation(fields: [eventId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   attendances Attendance[]
 
@@ -188,6 +198,8 @@ model Session {
   @@unique([eventId, startDate])
   // Check-in resolves "the active session today" by date window.
   @@index([startDate, endDate])
+  // The finalizer sweeps for finalizedAt IS NULL on past days.
+  @@index([finalizedAt])
 }
 
 model Location {
@@ -214,8 +226,12 @@ model Attendance {
   status       AttendanceStatus @default(ABSENT)
   userId       Int
   sessionId    Int
-  checkInTime  DateTime
+  // Nullable: ABSENT rows written by the session finalizer have no check-in.
+  checkInTime  DateTime?
   checkOutTime DateTime?
+  // True when the finalizer stamped the check-out (user never signed out);
+  // distinguishes an administrative close from a real face-verified check-out.
+  autoCheckedOut Boolean @default(false)
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: Cascade)
@@ -254,8 +270,6 @@ model LivenessChallenge {
 }
 
 enum AnomalyType {
-  IMPOSSIBLE_TRAVEL
-  GEO_IP_MISMATCH
   DUPLICATE_DESCRIPTOR
   LIVENESS_FAILED
   REPLAY_SUSPECTED

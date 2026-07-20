@@ -5,8 +5,10 @@
 // deletion. Scheduling failures never fail the request - they are logged
 // and the session worker's sweep picks the event up later.
 import crypto from "node:crypto";
-import { startOfDay, addDays } from "date-fns";
 import { prisma } from "../config/prisma-client.js";
+import { utcDayStart } from "../utils/time-context.js";
+import { RECURRENCE_INTERVAL_MESSAGE } from "../config/constants.js";
+import { nextOccurrenceStart } from "./session-planning.js";
 import {
   NotFoundError,
   ValidationError,
@@ -25,6 +27,35 @@ function inclusiveDurationDays(startDate, endDate) {
   const end = new Date(endDate);
   const diffTime = Math.abs(end - start);
   return Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+}
+
+/**
+ * Guards the recurrence config the session planner depends on: an occurrence
+ * must finish before the next one begins. With recurrenceInterval <
+ * durationDays the next occurrence's first day already has a Session row, so
+ * generation stalls on it forever. Checked here on the MERGED values, because
+ * a partial update supplies only one half of the pair.
+ */
+function assertRecurrenceFits({ isRecurring, recurrenceInterval, durationDays }) {
+  if (!isRecurring) return;
+  if ((recurrenceInterval ?? 1) < (durationDays ?? 1)) {
+    throw new ValidationError(RECURRENCE_INTERVAL_MESSAGE);
+  }
+}
+
+/**
+ * Coherence of the merged schedule: the daily window must open before it
+ * closes and the date range must run forward. The request validator catches
+ * these when both halves are in one body; here the other half may come from
+ * the existing row, which the validator cannot see.
+ */
+function assertScheduleCoherent({ startTime, endTime, startDate, endDate }) {
+  if (startTime && endTime && endTime <= startTime) {
+    throw new ValidationError("endTime must be after startTime.");
+  }
+  if (startDate && endDate && new Date(endDate) < new Date(startDate)) {
+    throw new ValidationError("endDate must be on or after startDate.");
+  }
 }
 
 /**
@@ -76,6 +107,13 @@ export async function createEvent(input, file) {
     calculatedDuration = inclusiveDurationDays(startDate, endDate);
   }
 
+  assertRecurrenceFits({
+    isRecurring,
+    recurrenceInterval,
+    durationDays: calculatedDuration,
+  });
+  assertScheduleCoherent({ startTime, endTime, startDate, endDate });
+
   const coverImage = file ? await uploadImage(file.buffer) : undefined;
 
   const eventData = {
@@ -108,7 +146,7 @@ export async function createEvent(input, file) {
   });
 
   try {
-    const eventStartDate = startOfDay(new Date(startDate));
+    const eventStartDate = utcDayStart(startDate);
     await queueSessionCreation(event.id, eventStartDate, {
       scheduled: `📅 Scheduled first session for event ${
         event.id
@@ -219,6 +257,18 @@ export async function updateEvent(eventId, input, file) {
     calculatedDuration = inclusiveDurationDays(newStartDate, newEndDate);
   }
 
+  assertRecurrenceFits({
+    isRecurring: newIsRecurring,
+    recurrenceInterval: recurrenceInterval ?? existingEvent.recurrenceInterval,
+    durationDays: calculatedDuration ?? existingEvent.durationDays,
+  });
+  assertScheduleCoherent({
+    startTime: startTime ?? existingEvent.startTime,
+    endTime: endTime ?? existingEvent.endTime,
+    startDate: newStartDate,
+    endDate: newEndDate,
+  });
+
   // Cover image wire semantics (see utils/cloudinary.js imageColumnValue):
   // a file part replaces, body coverImage '' removes, absence leaves the
   // column untouched. undefined below means "no change".
@@ -239,29 +289,68 @@ export async function updateEvent(eventId, input, file) {
     ...(startTime && { startTime }),
     ...(endTime && { endTime }),
     ...(isRecurring !== undefined && { isRecurring }),
-    ...(calculatedDuration && { durationDays: calculatedDuration }),
+    ...(calculatedDuration !== undefined && { durationDays: calculatedDuration }),
   };
 
   if (location) {
-    updateData.location = {
-      update: {
-        name: location.name,
-        city: location.city || null,
-        country: location.country || null,
-      },
+    // Never mutate a Location row other events point at: the API creates one
+    // location per event, but the schema is 1:N and seeded/legacy data shares
+    // rows - a nested update there would silently rename another event's
+    // venue. Shared rows get a fresh location instead.
+    const locationData = {
+      name: location.name,
+      city: location.city || null,
+      country: location.country || null,
     };
+    const eventsOnLocation = await prisma.event.count({
+      where: { locationId: existingEvent.locationId, deletedAt: {} },
+    });
+    updateData.location =
+      eventsOnLocation > 1
+        ? { create: locationData }
+        : { update: locationData };
   }
 
-  const updatedEvent = await prisma.event.update({
-    where: { id: eventId },
-    data: updateData,
-    include: {
-      location: true,
-      sessions: {
-        orderBy: { startDate: "desc" },
-        take: 1,
+  // Did this update change anything that shapes the session plan?
+  const scheduleChanged =
+    (startDate &&
+      new Date(startDate).getTime() !==
+        new Date(existingEvent.startDate).getTime()) ||
+    (endDate !== undefined &&
+      (newEndDate?.getTime() ?? null) !==
+        (existingEvent.endDate ? new Date(existingEvent.endDate).getTime() : null)) ||
+    (startTime && startTime !== existingEvent.startTime) ||
+    (endTime && endTime !== existingEvent.endTime) ||
+    (isRecurring !== undefined && isRecurring !== existingEvent.isRecurring) ||
+    (recurrenceInterval !== undefined &&
+      recurrenceInterval !== existingEvent.recurrenceInterval) ||
+    (calculatedDuration !== undefined &&
+      calculatedDuration !== existingEvent.durationDays);
+
+  // Schedule edits on an event with no attendance rebuild its sessions from
+  // scratch: existing rows are deleted IN THE SAME TRANSACTION as the event
+  // update, and the worker recreates them from the new shape (its
+  // sessions.length === 0 path starts from the new startDate). Leaving the
+  // old rows in place stranded the event - check-in stayed open on days the
+  // event no longer covered and closed on days it did, and the denormalized
+  // session times went stale.
+  const rebuildSessions = scheduleChanged && hasAttendance === 0;
+
+  const updatedEvent = await prisma.$transaction(async (tx) => {
+    if (rebuildSessions) {
+      await tx.session.deleteMany({ where: { eventId } });
+    }
+    return tx.event.update({
+      where: { id: eventId },
+      data: updateData,
+      include: {
+        location: true,
+        sessions: {
+          orderBy: { startDate: "desc" },
+          take: 1,
+        },
       },
-    },
+    });
   });
 
   // The replaced/removed asset is cleaned up off the response path once the row
@@ -270,10 +359,32 @@ export async function updateEvent(eventId, input, file) {
     void deleteImage(existingEvent.coverImage);
   }
 
-  await reconcileSessionSchedule(existingEvent, updatedEvent, {
-    startDate,
-    isRecurring,
-  });
+  if (rebuildSessions) {
+    // After commit only: the worker must see the deleted rows and the new
+    // event shape when it rebuilds.
+    try {
+      await queueSessionCreation(
+        updatedEvent.id,
+        utcDayStart(updatedEvent.startDate),
+        {
+          scheduled: `📅 Scheduled session rebuild for updated event ${updatedEvent.id}`,
+          immediate: `📅 Queued immediate session rebuild for updated event ${updatedEvent.id}`,
+        }
+      );
+    } catch (error) {
+      // Never fail the request: the scheduler's daily sweep picks the
+      // sessionless event up.
+      logger.error(
+        error,
+        `Failed to queue session rebuild for event ${updatedEvent.id}`
+      );
+    }
+  } else {
+    await reconcileSessionSchedule(existingEvent, updatedEvent, {
+      startDate,
+      isRecurring,
+    });
+  }
 
   return updatedEvent;
 }
@@ -296,7 +407,11 @@ async function reconcileSessionSchedule(
     const hasNoSessions = existingEvent.sessions.length === 0;
 
     if (hasNoSessions || startDateChanged || recurringStatusChanged) {
-      const eventStartDate = startOfDay(updatedEvent.startDate);
+      // utcDayStart, not the server's local midnight: session rows are keyed
+      // on a UTC-midnight startDate, so a non-UTC server's local midnight
+      // never matched a worker-created row and this check enqueued a
+      // redundant job on every single event update.
+      const eventStartDate = utcDayStart(updatedEvent.startDate);
 
       // Check if there's already a session for the new start date.
       // findUnique on the compound key: Session is not soft-deletable.
@@ -323,17 +438,20 @@ async function reconcileSessionSchedule(
       }
     }
 
-    // If converted to recurring, schedule the next occurrence.
+    // If converted to recurring, schedule the next occurrence. The shared
+    // planner owns the arithmetic (multi-day step-back, UTC day handling) -
+    // this used to hand-roll a server-local variant that disagreed with the
+    // worker's for multi-day events.
     if (
       recurringStatusChanged &&
       updatedEvent.isRecurring &&
       updatedEvent.sessions.length > 0
     ) {
       const lastSession = updatedEvent.sessions[0];
-      const nextSessionDate = addDays(
-        startOfDay(new Date(lastSession.startDate)),
-        updatedEvent.recurrenceInterval
-      );
+      const nextSessionDate = nextOccurrenceStart(lastSession.startDate, {
+        durationDays: updatedEvent.durationDays,
+        recurrenceInterval: updatedEvent.recurrenceInterval,
+      });
 
       const withinEventPeriod =
         !updatedEvent.endDate ||

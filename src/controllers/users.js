@@ -4,7 +4,6 @@
 // service, shape the { message, data, meta? } envelope.
 import {
   asyncHandler,
-  ValidationError,
   UnauthorizedError,
 } from "../middleware/error-handler.js";
 import { HTTP_STATUS_CODES } from "../config/constants.js";
@@ -14,17 +13,12 @@ import {
   changePasswordValidation,
   updateUserProfileValidation,
 } from "../validation/users-validation.js";
-import { parsePagination, paginationMeta } from "../utils/pagination.js";
+import { parsePagination } from "../utils/pagination.js";
+import { parseId } from "../utils/parse-id.js";
 import { assertAttendant } from "../utils/authorization.js";
 import * as userService from "../services/user.service.js";
 import * as userQueryService from "../services/user-query.service.js";
-
-const parseUserId = (userId, message = "Valid user ID is required.") => {
-  if (!userId || isNaN(parseInt(userId))) {
-    throw new ValidationError(message);
-  }
-  return parseInt(userId);
-};
+import { sendPage } from "./shared.js";
 
 const handleAddUser = asyncHandler(async (req, res, _next) => {
   const { firstName, lastName, email, phone } = req.body;
@@ -48,7 +42,7 @@ export const addUser = [
 ];
 
 const handleUpdateUserProfile = asyncHandler(async (req, res, _next) => {
-  const targetUserId = parseUserId(req.params.userId);
+  const targetUserId = parseId(req.params.userId, "Valid user ID is required.");
 
   const data = await userService.updateUserProfile(
     req.user,
@@ -69,7 +63,7 @@ export const updateUserProfile = [
 
 
 export const getUserById = asyncHandler(async (req, res, _next) => {
-  const targetUserId = parseUserId(
+  const targetUserId = parseId(
     req.params.userId,
     "Valid user ID is required"
   );
@@ -91,23 +85,18 @@ export const getAllUsers = asyncHandler(async (req, res, _next) => {
     search: req.query.search,
   });
 
-  if (users.length === 0) {
-    return res.status(HTTP_STATUS_CODES.OK).json({
-      message: "There are no users at the moment.",
-      data: [],
-      meta: paginationMeta(0, page, limit),
-    });
-  }
-
-  return res.status(HTTP_STATUS_CODES.OK).json({
+  sendPage(res, {
     message: "Users successfully fetched.",
-    data: users,
-    meta: paginationMeta(total, page, limit),
+    emptyMessage: "There are no users at the moment.",
+    rows: users,
+    total,
+    page,
+    limit,
   });
 });
 
 export const deleteUser = asyncHandler(async (req, res, _next) => {
-  const targetUserId = parseUserId(req.params.userId);
+  const targetUserId = parseId(req.params.userId, "Valid user ID is required.");
 
   await userService.softDeleteUser(req.user, targetUserId);
 
@@ -135,12 +124,12 @@ const handleChangePassword = asyncHandler(async (req, res, _next) => {
 });
 
 export const changePassword = [
-  ...validationMiddleware.create(changePasswordValidation),
+  validationMiddleware.create(changePasswordValidation),
   handleChangePassword,
 ];
 
 export const updateProfilePicture = asyncHandler(async (req, res, _next) => {
-  const targetUserId = parseUserId(req.params.userId);
+  const targetUserId = parseId(req.params.userId, "Valid user ID is required.");
 
   const data = await userService.updateProfilePicture(
     req.user,

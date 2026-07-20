@@ -37,12 +37,20 @@ export async function ensureVenueSecret(eventId) {
   if (!event) return null;
   if (event.venueSecret) return event.venueSecret;
 
+  // Guarded claim, then re-read. A plain read-then-write let two concurrent
+  // callers (the venue display and the first scanner) mint DIFFERENT
+  // secrets; the loser's write won and every code the display had already
+  // fetched failed validation for its whole batch window.
   const secret = crypto.randomBytes(32).toString("hex");
-  await prisma.event.update({
-    where: { id: eventId },
+  await prisma.event.updateMany({
+    where: { id: eventId, venueSecret: null },
     data: { venueSecret: secret },
   });
-  return secret;
+  const claimed = await prisma.event.findFirst({
+    where: { id: eventId },
+    select: { venueSecret: true },
+  });
+  return claimed?.venueSecret ?? null;
 }
 
 /**
@@ -65,8 +73,19 @@ export function upcomingCodes(secret, now = Date.now(), count = VENUE_CODE.BATCH
 /**
  * True when `code` matches the current window or one within the skew tolerance.
  * Timing-safe comparison; a wrong-length code fails fast.
+ *
+ * `skewWindows` is widened at the UPLOAD step: the code is scanned at the
+ * preflight and re-sent with the frames, so it must stay acceptable for the
+ * whole challenge lifetime. With the default tolerance a user who scanned near
+ * the end of a window had as little as ~30s to perform three prompted actions
+ * and upload, and was then told the code had expired.
  */
-export function isValidVenueCode(secret, code, now = Date.now()) {
+export function isValidVenueCode(
+  secret,
+  code,
+  now = Date.now(),
+  skewWindows = VENUE_CODE.SKEW_WINDOWS
+) {
   // Must be exactly the hex we mint. This also keeps the byte length equal to
   // the string length, so timingSafeEqual (which throws on unequal-length
   // buffers) can never RangeError on a crafted multibyte input.
@@ -74,7 +93,7 @@ export function isValidVenueCode(secret, code, now = Date.now()) {
     return false;
   }
   const current = windowFor(now);
-  for (let d = -VENUE_CODE.SKEW_WINDOWS; d <= VENUE_CODE.SKEW_WINDOWS; d++) {
+  for (let d = -skewWindows; d <= skewWindows; d++) {
     const expected = codeForWindow(secret, current + d);
     if (crypto.timingSafeEqual(Buffer.from(code), Buffer.from(expected))) {
       return true;

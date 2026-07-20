@@ -15,13 +15,14 @@ import {
   ValidationError,
   BadRequestError,
 } from "../middleware/error-handler.js";
-import sendPasswordResetEmail from "../utils/sendMail.js";
+import sendPasswordResetEmail from "../utils/send-mail.js";
 import {
   findPrincipal,
   findPrincipalByEmail,
   revokeAllSessions,
 } from "./auth.service.js";
 import ENV from "../config/env.js";
+import { dispatchAsync } from "../utils/dispatch-async.js";
 import logger from "../utils/logger.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -125,7 +126,10 @@ export const requestPasswordReset = async (email) => {
     },
   });
 
-  await sendResetEmail(principal, rawToken);
+  // Fire-and-forget: awaiting SMTP here made a known email measurably slower
+  // than an unknown one (which returns above), re-opening enumeration by
+  // timing. The DB writes are done; only the send is deferred.
+  dispatchAsync(() => sendResetEmail(principal, rawToken), "password reset email");
 };
 
 /**

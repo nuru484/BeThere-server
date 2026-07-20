@@ -12,11 +12,14 @@ import {
   ConflictError,
   NotFoundError,
 } from "../middleware/error-handler.js";
+import ENV from "../config/env.js";
 import { assertSelfOrAdmin } from "../utils/authorization.js";
-import { encryptTemplate } from "../utils/biometric-crypto.js";
-import { isFaceDescriptor } from "../utils/face-match.js";
+import { decryptTemplate, encryptTemplate } from "../utils/biometric-crypto.js";
+import { euclideanDistance, isFaceDescriptor } from "../utils/face-match.js";
 import { BIOMETRIC_CONSENT_VERSION } from "../config/constants.js";
+import { flagAnomaly } from "./anomaly.service.js";
 import { recordAudit } from "./audit.service.js";
+import logger from "../utils/logger.js";
 import { KIND_USER, toSafeUser } from "./auth.service.js";
 import {
   issueChallenge,
@@ -25,6 +28,67 @@ import {
 import { getEnrollmentVerifier } from "./liveness/liveness-verifier.js";
 
 const hasEnrollment = (user) => Boolean(user.faceScanEnc || user.faceScan);
+
+/** How many encrypted templates one duplicate-scan batch decrypts. */
+const DUPLICATE_SCAN_BATCH = 200;
+
+/**
+ * The classic buddy-punching vector: the same face enrolled under a second
+ * account. Scans every OTHER user's stored template against the new
+ * descriptor (in bounded batches, decrypting in memory only) and throws 409
+ * when one matches within the face-match threshold, flagging a
+ * DUPLICATE_DESCRIPTOR anomaly for review.
+ */
+async function assertDescriptorNotEnrolledElsewhere(userId, descriptor, ip) {
+  let cursor;
+
+  for (;;) {
+    const batch = await prisma.user.findMany({
+      where: { id: { not: userId }, faceScanEnc: { not: null } },
+      select: { id: true, faceScanEnc: true },
+      orderBy: { id: "asc" },
+      take: DUPLICATE_SCAN_BATCH,
+      ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
+    });
+    if (batch.length === 0) return;
+
+    for (const other of batch) {
+      let enrolled;
+      try {
+        enrolled = decryptTemplate(other.faceScanEnc);
+      } catch (error) {
+        // A corrupt template cannot match anything; skip it.
+        logger.error(error, `Corrupt face template for user ${other.id}`);
+        continue;
+      }
+      if (!isFaceDescriptor(enrolled)) continue;
+
+      if (euclideanDistance(descriptor, enrolled) <= ENV.FACE_MATCH_THRESHOLD) {
+        await flagAnomaly({
+          userId,
+          type: "DUPLICATE_DESCRIPTOR",
+          severity: "HIGH",
+          detail: { matchedUserId: other.id },
+        });
+        await recordAudit({
+          actorKind: "USER",
+          actorId: userId,
+          action: "FACE_ENROLL_DUPLICATE",
+          targetType: "User",
+          targetId: userId,
+          metadata: { matchedUserId: other.id },
+          ip,
+        });
+        throw new ConflictError(
+          "This face appears to be enrolled on another account already. Please contact an admin."
+        );
+      }
+    }
+
+    if (batch.length < DUPLICATE_SCAN_BATCH) return;
+    cursor = batch[batch.length - 1].id;
+  }
+}
 
 /** Challenge mode tag: keeps an enrollment challenge from ever driving a
  * check-in (and vice versa) even though both use the same token format. */
@@ -112,22 +176,52 @@ export async function enrollFaceScan(
       ip,
     });
 
+    // CustomError only reads layer/severity/code/context from its options, so
+    // the diagnostics must ride under `context` or they are silently dropped.
     throw new BadRequestError(
       "We could not verify a live face in that capture. Please follow the prompts in order and try again.",
-      { reasons: verdict.reasons, failedActions: verdict.failedActions }
+      {
+        context: {
+          reasons: verdict.reasons,
+          failedActions: verdict.failedActions,
+        },
+      }
     );
   }
 
-  const updated = await prisma.user.update({
-    where: { id: userId },
+  // Refuse a template that already belongs to another account (buddy
+  // punching by double-enrollment). Runs AFTER liveness passed, so the cost
+  // is only paid for captures that would otherwise enroll.
+  await assertDescriptorNotEnrolledElsewhere(userId, verdict.descriptor, ip);
+
+  // GUARDED write, not a plain update. The hasEnrollment check above happens
+  // seconds earlier - a whole face-engine pass earlier - so two captures
+  // started in two tabs would both pass it and the second, which could be a
+  // different person's face, would silently overwrite the first. Asserting the
+  // template is still empty makes "one enrollment until an admin resets it"
+  // actually hold.
+  // Guarded on faceScanEnc only: `faceScan` is a Json? column and Prisma
+  // rejects a bare null filter on JSON (it needs DbNull/JsonNull). A legacy
+  // plaintext enrollment is already refused by the hasEnrollment read above,
+  // and the race this closes is between two NEW enrollments, which both have
+  // faceScanEnc null.
+  const claimed = await prisma.user.updateMany({
+    where: { id: userId, faceScanEnc: null },
     data: {
       faceScanEnc: encryptTemplate(verdict.descriptor),
-      faceScan: null,
       biometricConsentAt: new Date(),
       biometricConsentVersion: BIOMETRIC_CONSENT_VERSION,
       faceLastUsedAt: new Date(),
     },
   });
+
+  if (claimed.count === 0) {
+    throw new ConflictError(
+      "User face scan already exists. Contact an admin to reset your face scan before updating."
+    );
+  }
+
+  const updated = await prisma.user.findFirst({ where: { id: userId } });
 
   await recordAudit({
     actorKind: "USER",

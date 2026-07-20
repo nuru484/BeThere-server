@@ -120,6 +120,19 @@ export const errorHandler = (error, req, res, _next) => {
     processedError = handlePrismaError(error);
   }
 
+  // Multer limit violations (file too large, too many files) are client
+  // errors; unmapped they surfaced as 500s.
+  if (processedError?.name === "MulterError") {
+    const message =
+      processedError.code === "LIMIT_FILE_SIZE"
+        ? "Uploaded file is too large."
+        : processedError.code === "LIMIT_FILE_COUNT" ||
+            processedError.code === "LIMIT_UNEXPECTED_FILE"
+          ? "Too many files uploaded."
+          : "Invalid file upload.";
+    processedError = new BadRequestError(message, { code: "UPLOAD_ERROR" });
+  }
+
   const sanitizedBody = sanitizeErrorData(req.body);
 
   // Default values

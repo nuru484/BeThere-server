@@ -1,12 +1,15 @@
 {
   "name": "bethere-server",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "server.js",
   "type": "module",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "postinstall": "prisma generate",
     "dev": "node --watch --env-file .env server",
-    "migrate": "node --env-file .env ./node_modules/.bin/prisma migrate dev --name init",
+    "migrate": "node --env-file .env ./node_modules/.bin/prisma migrate dev",
     "migrate:deploy": "node --env-file .env ./node_modules/.bin/prisma migrate deploy",
     "start": "node server.js",
     "deploy": "npm install --include=dev && npx prisma generate",
@@ -16,6 +19,7 @@
     "worker": "node worker.js",
     "studio": "node --env-file .env ./node_modules/.bin/prisma studio",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "lint": "eslint ."
   },
   "author": "",
@@ -43,19 +47,20 @@
     "helmet": "^8.3.0",
     "ioredis": "^5.8.2",
     "jsonwebtoken": "^9.0.2",
-    "morgan": "^1.10.0",
     "multer": "^2.0.2",
     "nodemailer": "^7.0.10",
     "pg": "^8.16.3",
     "pino": "^10.1.0",
+    "pino-http": "^11.0.0",
     "pino-pretty": "^13.1.2",
+    "prisma": "^7.2.0",
     "rate-limit-redis": "^6.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
+    "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^9.39.0",
     "globals": "^16.5.0",
-    "prisma": "^7.2.0",
     "supertest": "^7.2.2",
     "vitest": "^4.1.10"
   }

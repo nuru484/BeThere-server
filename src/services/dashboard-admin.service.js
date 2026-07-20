@@ -2,8 +2,10 @@
 //
 // Admin dashboard aggregations: platform totals and the all-users
 // attendance time series with status breakdowns.
-import { format } from "date-fns";
+import { Prisma } from "@prisma/client";
+import ENV from "../config/env.js";
 import { prisma } from "../config/prisma-client.js";
+import { eventDayKey } from "../utils/time-context.js";
 import { parseDateRange } from "./dashboard-user.service.js";
 
 /** User and event totals for the admin landing cards. */
@@ -37,83 +39,77 @@ export async function getAdminDashboardTotals() {
 export async function getAllUsersAttendanceData(startDate, endDate) {
   const { start, end } = parseDateRange(startDate, endDate);
 
-  // Narrow select: the aggregation below only reads userId/status/
-  // checkInTime and the event's isRecurring flag. Pulling full user and
-  // event records for every attendance row multiplied the payload roughly
-  // tenfold and made a wide date range a memory hazard.
-  const attendances = await prisma.attendance.findMany({
-    where: {
-      checkInTime: {
-        gte: start,
-        lte: end,
-      },
-    },
-    select: {
-      userId: true,
-      status: true,
-      checkInTime: true,
-      session: {
-        select: {
-          event: {
-            select: {
-              isRecurring: true,
-            },
-          },
-        },
-      },
-    },
-    orderBy: {
-      checkInTime: "asc",
-    },
-  });
+  // ABSENT rows (written by the session finalizer) have no checkInTime; they
+  // enter the range by their creation instant, which lands on (or just
+  // after) the finalized session's day.
+  const rangeWhere = {
+    OR: [
+      { checkInTime: { gte: start, lte: end } },
+      { checkInTime: null, createdAt: { gte: start, lte: end } },
+    ],
+  };
 
-  // Group attendance by date for line chart
-  const attendanceByDate = {};
+  // Every number aggregates in SQL. The per-day series is a raw GROUP BY on
+  // the venue-timezone day: the previous version materialized EVERY
+  // attendance row in range into memory (the range caps days, not rows - at
+  // thousands of users this was millions of rows on the hot admin landing
+  // page) and bucketed by the SERVER's local day, disagreeing with the
+  // check-in path's venue-day discipline.
+  const effectiveInstant = Prisma.sql`COALESCE("checkInTime", "createdAt")`;
+  const venueDay = Prisma.sql`to_char((${effectiveInstant} AT TIME ZONE 'UTC') AT TIME ZONE ${ENV.EVENT_TIMEZONE}, 'YYYY-MM-DD')`;
 
-  attendances.forEach((attendance) => {
-    const date = format(new Date(attendance.checkInTime), "yyyy-MM-dd");
+  const [statusGroups, recurringCount, nonRecurringCount, dayRows, distinctUsers] =
+    await Promise.all([
+      prisma.attendance.groupBy({
+        by: ["status"],
+        where: rangeWhere,
+        _count: { _all: true },
+      }),
+      prisma.attendance.count({
+        where: { ...rangeWhere, session: { event: { isRecurring: true } } },
+      }),
+      prisma.attendance.count({
+        where: { ...rangeWhere, session: { event: { isRecurring: false } } },
+      }),
+      prisma.$queryRaw`
+        SELECT
+          ${venueDay} AS date,
+          COUNT(*)::int AS total,
+          COUNT(*) FILTER (WHERE status::text = 'PRESENT')::int AS present,
+          COUNT(*) FILTER (WHERE status::text = 'LATE')::int AS late,
+          COUNT(*) FILTER (WHERE status::text = 'ABSENT')::int AS absent,
+          COUNT(DISTINCT "userId")::int AS "uniqueUsers"
+        FROM "Attendance"
+        WHERE ${effectiveInstant} >= ${start} AND ${effectiveInstant} <= ${end}
+        GROUP BY 1
+        ORDER BY 1 ASC
+      `,
+      prisma.attendance.groupBy({
+        by: ["userId"],
+        where: rangeWhere,
+      }),
+    ]);
 
-    if (!attendanceByDate[date]) {
-      attendanceByDate[date] = {
-        date,
-        total: 0,
-        present: 0,
-        late: 0,
-        absent: 0,
-        uniqueUsers: new Set(),
-      };
-    }
+  const statusCount = (status) =>
+    statusGroups.find((group) => group.status === status)?._count._all ?? 0;
 
-    attendanceByDate[date].total++;
-    attendanceByDate[date].uniqueUsers.add(attendance.userId);
+  const timeSeriesData = dayRows.map((day) => ({
+    date: day.date,
+    total: day.total,
+    present: day.present,
+    late: day.late,
+    absent: day.absent,
+    uniqueUsers: day.uniqueUsers,
+  }));
 
-    // Count by status
-    if (attendance.status === "PRESENT") {
-      attendanceByDate[date].present++;
-    } else if (attendance.status === "LATE") {
-      attendanceByDate[date].late++;
-    } else if (attendance.status === "ABSENT") {
-      attendanceByDate[date].absent++;
-    }
-  });
-
-  // Convert to array and format for line chart
-  const timeSeriesData = Object.values(attendanceByDate)
-    .map((day) => ({
-      date: day.date,
-      total: day.total,
-      present: day.present,
-      late: day.late,
-      absent: day.absent,
-      uniqueUsers: day.uniqueUsers.size,
-    }))
-    .sort((a, b) => new Date(a.date) - new Date(b.date));
-
-  // Calculate overall statistics for bar chart (percentages)
-  const totalAttendances = attendances.length;
-  const presentCount = attendances.filter((a) => a.status === "PRESENT").length;
-  const lateCount = attendances.filter((a) => a.status === "LATE").length;
-  const absentCount = attendances.filter((a) => a.status === "ABSENT").length;
+  // Overall statistics for bar chart (percentages), from the SQL groupBy.
+  const totalAttendances = statusGroups.reduce(
+    (sum, group) => sum + group._count._all,
+    0
+  );
+  const presentCount = statusCount("PRESENT");
+  const lateCount = statusCount("LATE");
+  const absentCount = statusCount("ABSENT");
 
   const statusPercentages = {
     present:
@@ -138,19 +134,15 @@ export async function getAllUsersAttendanceData(startDate, endDate) {
   };
 
   // Calculate additional insights
-  const uniqueUsersAttended = new Set(attendances.map((a) => a.userId)).size;
-  const recurringEventAttendances = attendances.filter(
-    (a) => a.session.event.isRecurring
-  ).length;
-  const nonRecurringEventAttendances = attendances.filter(
-    (a) => !a.session.event.isRecurring
-  ).length;
+  const uniqueUsersAttended = distinctUsers.length;
+  const recurringEventAttendances = recurringCount;
+  const nonRecurringEventAttendances = nonRecurringCount;
 
   // Summary statistics
   const summary = {
     dateRange: {
-      from: format(start, "yyyy-MM-dd"),
-      to: format(end, "yyyy-MM-dd"),
+      from: eventDayKey(start),
+      to: eventDayKey(end),
     },
     totalAttendances,
     uniqueUsersAttended,

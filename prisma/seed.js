@@ -1,11 +1,17 @@
-// prisma/seed.ts
+// prisma/seed.js
 import crypto from "node:crypto";
 import { AttendanceStatus } from "@prisma/client";
 import { prisma } from "../src/config/prisma-client.js";
 import * as bcrypt from "bcrypt";
 import logger from "../src/utils/logger.js";
 import ENV from "../src/config/env.js";
-import { addDays, startOfDay, setHours, setMinutes } from "date-fns";
+import { addDays } from "date-fns";
+import {
+  addUtcDays,
+  eventCalendarDay,
+  utcDayAtTime,
+  utcDayStart,
+} from "../src/utils/time-context.js";
 
 async function main() {
   // Explicit opt-in: without ADMIN_SEED_ENABLED=true the seed is a no-op, so
@@ -98,8 +104,24 @@ async function main() {
     admin: { id: admin.id, email: admin.email },
   });
 
+  // ============ SEED SAMPLE DATA (separate opt-in) ============
+  // Sample attendants/events are demo furniture, NOT part of first-boot
+  // setup. Gating them behind their own flag means creating the real admin
+  // in production can never also plant example accounts - and even when
+  // seeded, the sample users get random passwords (they are logged into via
+  // data inspection or password reset, never a published credential).
+  if (!ENV.SEED_SAMPLE_DATA) {
+    logger.info(
+      "Sample data skipped (SEED_SAMPLE_DATA is not true). Seeding complete."
+    );
+    return;
+  }
+
   // ============ SEED REGULAR USERS ============
-  const regularPassword = await bcrypt.hash("Password123!", 10);
+  const regularPassword = await bcrypt.hash(
+    crypto.randomBytes(24).toString("hex"),
+    10
+  );
 
   const users = await Promise.all([
     prisma.user.upsert({
@@ -219,8 +241,7 @@ async function main() {
   logger.info(`✅ ${locations.length} locations seeded successfully`);
 
   // ============ SEED EVENTS ============
-  const now = new Date();
-  const today = startOfDay(now);
+  const today = eventCalendarDay();
 
   // Check if events already exist
   const existingEventsCount = await prisma.event.count();
@@ -331,75 +352,43 @@ async function main() {
   logger.info(`✅ ${events.length} events seeded successfully`);
 
   // ============ SEED SESSIONS ============
+  // Same convention the session worker writes: date-only UTC-midnight
+  // startDate (the venue calendar day) and UTC-placed HH:MM times, batched
+  // with createMany.
   const sessionsByEvent = new Map();
 
-  // Past Event Sessions (3 days) - ONE-TIME
-  const pastEventSessions = [];
-  for (let i = 0; i < 3; i++) {
-    const sessionDate = addDays(startOfDay(pastEvent.startDate), i);
-    const session = await prisma.session.create({
-      data: {
-        eventId: pastEvent.id,
-        startDate: sessionDate,
-        endDate: sessionDate,
-        startTime: setMinutes(setHours(sessionDate, 8), 0),
-        endTime: setMinutes(setHours(sessionDate, 18), 0),
-      },
+  const seedSessions = async (event, firstDay, count, stepDays, startTime, endTime) => {
+    const rows = Array.from({ length: count }, (_, i) => {
+      const day = addUtcDays(utcDayStart(firstDay), i * stepDays);
+      return {
+        eventId: event.id,
+        startDate: day,
+        endDate: day,
+        startTime: utcDayAtTime(day, startTime),
+        endTime: utcDayAtTime(day, endTime),
+      };
     });
-    pastEventSessions.push(session);
-  }
-  sessionsByEvent.set(pastEvent.id, pastEventSessions);
+    await prisma.session.createMany({ data: rows, skipDuplicates: true });
+    const sessions = await prisma.session.findMany({
+      where: { eventId: event.id },
+      orderBy: { startDate: "asc" },
+    });
+    sessionsByEvent.set(event.id, sessions);
+    return sessions;
+  };
 
-  // Current Event Sessions (8 days) - ONE-TIME
-  const currentEventSessions = [];
-  for (let i = 0; i < 8; i++) {
-    const sessionDate = addDays(startOfDay(currentEvent.startDate), i);
-    const session = await prisma.session.create({
-      data: {
-        eventId: currentEvent.id,
-        startDate: sessionDate,
-        endDate: sessionDate,
-        startTime: setMinutes(setHours(sessionDate, 9), 0),
-        endTime: setMinutes(setHours(sessionDate, 17), 0),
-      },
-    });
-    currentEventSessions.push(session);
-  }
-  sessionsByEvent.set(currentEvent.id, currentEventSessions);
-
-  // Recurring Event Sessions (weekly for past 2 weeks + current week)
-  const recurringEventSessions = [];
-  for (let i = 0; i < 3; i++) {
-    const sessionDate = addDays(startOfDay(recurringEvent.startDate), i * 7);
-    const session = await prisma.session.create({
-      data: {
-        eventId: recurringEvent.id,
-        startDate: sessionDate,
-        endDate: sessionDate,
-        startTime: setMinutes(setHours(sessionDate, 10), 0),
-        endTime: setMinutes(setHours(sessionDate, 12), 0),
-      },
-    });
-    recurringEventSessions.push(session);
-  }
-  sessionsByEvent.set(recurringEvent.id, recurringEventSessions);
-
-  // Daily Standup Sessions (past 7 days) - RECURRING
-  const dailyStandupSessions = [];
-  for (let i = 0; i < 8; i++) {
-    const sessionDate = addDays(startOfDay(dailyStandup.startDate), i);
-    const session = await prisma.session.create({
-      data: {
-        eventId: dailyStandup.id,
-        startDate: sessionDate,
-        endDate: sessionDate,
-        startTime: setMinutes(setHours(sessionDate, 9), 0),
-        endTime: setMinutes(setHours(sessionDate, 9), 30),
-      },
-    });
-    dailyStandupSessions.push(session);
-  }
-  sessionsByEvent.set(dailyStandup.id, dailyStandupSessions);
+  const pastEventSessions = await seedSessions(
+    pastEvent, pastEvent.startDate, 3, 1, "08:00", "18:00"
+  );
+  const currentEventSessions = await seedSessions(
+    currentEvent, currentEvent.startDate, 8, 1, "09:00", "17:00"
+  );
+  const recurringEventSessions = await seedSessions(
+    recurringEvent, recurringEvent.startDate, 3, 7, "10:00", "12:00"
+  );
+  const dailyStandupSessions = await seedSessions(
+    dailyStandup, dailyStandup.startDate, 8, 1, "09:00", "09:30"
+  );
 
   const totalSessions =
     pastEventSessions.length +
@@ -571,10 +560,8 @@ async function main() {
   logger.info(
     `   - Recurring events: Users can have multiple attendance records`
   );
-  logger.info("\n📝 Test User Credentials:");
-  logger.info(`   Email: john.doe@example.com | Password: Password123!`);
-  logger.info(`   Email: jane.smith@example.com | Password: Password123!`);
-  logger.info(`   (All regular users have the same password)`);
+  logger.info("\n📝 Sample users (john.doe@example.com, ...) have RANDOM passwords;");
+  logger.info("   sign them in via OTP login or a password reset.");
 }
 
 main()

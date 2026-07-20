@@ -367,6 +367,23 @@ Deployed on **Render** with the following configuration:
 
 > **Note:** Worker process is deployed separately using Render background workers to handle job queues efficiently.
 
+### Database migrations on deploy
+
+Migrations run from the **Docker entrypoint** (`docker-entrypoint.sh`), which
+executes `npx prisma migrate deploy` before the app boots - on the **web
+process only** (`PROCESS_TYPE != worker`), so worker containers never race
+the web container to apply the same migrations. The Prisma CLI is a runtime
+dependency, so the image contains the pinned version (no registry download
+at boot).
+
+- `RUN_MIGRATIONS=false` skips the automatic migration step (escape hatch
+  for running `migrate deploy` out-of-band, e.g. a manual release step).
+- If a platform bypasses the Docker entrypoint, run
+  `npx prisma migrate deploy` as the pre-deploy/release command instead; the
+  app assumes the schema is current when it boots.
+- CI verifies on every change that `prisma/migrations` exactly reproduces
+  `schema.prisma`, so a schema edit cannot land without its migration.
+
 ---
 
 ## 🤝 Contributing
