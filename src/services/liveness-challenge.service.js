@@ -30,7 +30,7 @@ function drawActions(n) {
  * ordered actions plus a short-lived signed token the client returns with its
  * frames.
  */
-export async function issueChallenge({ userId, eventId, mode = "in" }) {
+export async function issueChallenge({ userId, eventId = null, mode = "in" }) {
   const actions = drawActions(LIVENESS.ACTIONS_PER_CHALLENGE);
   const nonce = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + LIVENESS.CHALLENGE_TTL_MS);
@@ -56,7 +56,12 @@ export async function issueChallenge({ userId, eventId, mode = "in" }) {
  * Throws on expired/replayed/mismatched tokens - the caller must treat that as
  * a failed check-in.
  */
-export async function consumeChallenge({ token, userId, eventId, mode = "in" }) {
+export async function consumeChallenge({
+  token,
+  userId,
+  eventId = null,
+  mode = "in",
+}) {
   let decoded;
   try {
     decoded = jwt.verify(token, ENV.ACCESS_TOKEN_SECRET);
