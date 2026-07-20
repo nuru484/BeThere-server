@@ -32,6 +32,10 @@ export const KIND_ADMIN = "ADMIN";
 export const KIND_USER = "USER";
 
 const REFRESH_EXPIRY_DAYS = 7;
+/** Leeway in which re-presenting a just-rotated refresh token is treated as a
+ * concurrent-refresh race rather than token theft. Long enough to cover
+ * parallel tabs, short enough that a stolen token is still caught. */
+const REFRESH_REUSE_GRACE_MS = 15_000;
 const ACCESS_EXPIRY = "30m";
 const PENDING_2FA_EXPIRY = "5m";
 
@@ -301,10 +305,35 @@ export async function rotateRefreshToken(token) {
 
   if (consumed.count === 0) {
     const known = await prisma.refreshToken.findUnique({ where: { jtiHash } });
+
     if (known?.consumedAt) {
+      const sinceConsumed = Date.now() - known.consumedAt.getTime();
+
+      // A benign ROTATION RACE, not theft: two tabs (or two parallel requests)
+      // both 401 on the same expired access token and both present the same
+      // refresh cookie. One wins the atomic consume; the loser arrives
+      // milliseconds later. Treating that as theft would revoke every session
+      // and hard-log the user out of a perfectly normal page load, so a short
+      // leeway re-issues instead. Replays after the leeway are still theft.
+      if (
+        sinceConsumed <= REFRESH_REUSE_GRACE_MS &&
+        known.expiresAt.getTime() > Date.now()
+      ) {
+        const principal = await findPrincipal(decoded.kind, decoded.id);
+        if (!principal) {
+          throw new UnauthorizedError(
+            "Account no longer exists. Please log in again.",
+            { code: "INVALID_TOKEN" }
+          );
+        }
+        const tokens = await issueSession(decoded.kind, principal);
+        return { ...tokens, user: toSafeUser(decoded.kind, principal) };
+      }
+
       // Replay of an already-rotated token: someone holds a stolen copy.
       await revokeAllSessions(decoded.kind, decoded.id);
     }
+
     throw new UnauthorizedError("Invalid refresh token", {
       code: "INVALID_TOKEN",
     });
@@ -338,9 +367,13 @@ export async function logout(token) {
   try {
     const decoded = jwt.verify(token, ENV.REFRESH_TOKEN_SECRET);
     if (decoded?.jti) {
-      await prisma.refreshToken.updateMany({
-        where: { jtiHash: hashJti(decoded.jti), consumedAt: null },
-        data: { consumedAt: new Date() },
+      // DELETE rather than mark consumed. A consumed row is indistinguishable
+      // from one retired by normal rotation, and the rotation-race leeway in
+      // rotateRefreshToken would happily re-issue a session from it - i.e. a
+      // logged-out token would still buy a new session for a few seconds.
+      // Removing the row makes the token unconditionally dead.
+      await prisma.refreshToken.deleteMany({
+        where: { jtiHash: hashJti(decoded.jti) },
       });
     }
   } catch {

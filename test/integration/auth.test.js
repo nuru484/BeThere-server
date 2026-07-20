@@ -18,6 +18,17 @@ import {
   DESCRIPTOR,
 } from "../helpers.js";
 
+/**
+ * Pushes already-consumed refresh rows outside the rotation-race leeway, so a
+ * replay is judged as theft rather than a concurrent refresh. Lets the theft
+ * tests stay deterministic without sleeping for the real grace period.
+ */
+const ageOutConsumedTokens = (principalId) =>
+  prisma.refreshToken.updateMany({
+    where: { principalId, consumedAt: { not: null } },
+    data: { consumedAt: new Date(Date.now() - 60_000) },
+  });
+
 describe("POST /api/v1/auth/login (cookie-only)", () => {
   it("sets httpOnly auth cookies and returns only the safe user", async () => {
     await createAttendant({ email: "a@test.local", faceScan: DESCRIPTOR });
@@ -85,10 +96,40 @@ describe("POST /api/v1/refreshToken (cookie rotation)", () => {
       .set("Cookie", fresh.filter((c) => c.startsWith("bethere_refreshToken=")));
     expect(second.status).toBe(200);
 
+    // Once the rotation-race leeway has passed, the original is single-use.
+    await ageOutConsumedTokens(user.id);
     const replay = await request(app)
       .post("/api/v1/refreshToken")
       .set("Cookie", [session.refreshCookie]);
     expect(replay.status).toBe(401);
+  });
+
+  it("tolerates a concurrent refresh race without killing the session", async () => {
+    const user = await createAttendant({ email: "race@test.local" });
+    const session = await sessionFor("USER", user);
+
+    // Two tabs present the same refresh cookie at nearly the same moment.
+    const first = await request(app)
+      .post("/api/v1/refreshToken")
+      .set("Cookie", [session.refreshCookie]);
+    expect(first.status).toBe(200);
+
+    const racer = await request(app)
+      .post("/api/v1/refreshToken")
+      .set("Cookie", [session.refreshCookie]);
+
+    // The loser is re-issued rather than treated as theft...
+    expect(racer.status).toBe(200);
+
+    // ...and the winner's session is still alive (no epoch bump / purge).
+    const winnerCookies = cookiesFromResponse(first);
+    const stillValid = await request(app)
+      .get(`/api/v1/users/${user.id}`)
+      .set(
+        "Cookie",
+        winnerCookies.filter((c) => c.startsWith("bethere_accessToken="))
+      );
+    expect(stillValid.status).toBe(200);
   });
 
   it("treats replay as theft: every session for the principal dies", async () => {
@@ -101,7 +142,8 @@ describe("POST /api/v1/refreshToken (cookie rotation)", () => {
     expect(first.status).toBe(200);
     const firstCookies = cookiesFromResponse(first);
 
-    // Stolen copy replayed.
+    // Stolen copy replayed well after the rotation-race leeway.
+    await ageOutConsumedTokens(user.id);
     const replay = await request(app)
       .post("/api/v1/refreshToken")
       .set("Cookie", [session.refreshCookie]);

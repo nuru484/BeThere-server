@@ -178,4 +178,17 @@ const ENV = {
   WEB_DISABLE_WORKERS: envBool("WEB_DISABLE_WORKERS"),
 };
 
+// Fail closed: LIVENESS_ENABLED=false swaps in a verifier that passes EVERY
+// check-in without looking at a single frame. That is a legitimate switch for
+// local work and tests, but in production it would silently turn verified
+// presence into self-reported presence, and the resulting attendance rows are
+// indistinguishable from genuine ones. Refuse to boot instead.
+if (ENV.NODE_ENV === "production" && !ENV.LIVENESS_ENABLED) {
+  throw new Error(
+    "LIVENESS_ENABLED=false is not permitted when NODE_ENV=production: it " +
+      "disables face verification entirely and every check-in would pass. " +
+      "Unset it (defaults to true) or run with NODE_ENV!=production."
+  );
+}
+
 export default ENV;

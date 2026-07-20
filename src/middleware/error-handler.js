@@ -53,18 +53,46 @@ const generateErrorId = () => {
 /**
  * Sanitize error data for safe logging and response
  */
-const sanitizeErrorData = (data) => {
+/**
+ * Substrings that mark a field as sensitive. Beyond the obvious credentials
+ * these cover:
+ *  - "facescan"/"descriptor": the 128-float biometric template. Logging it
+ *    would defeat the AES-256-GCM at-rest encryption it is stored under.
+ *  - "code"/"otp": one-time login and 2FA codes, and the rotating venue code
+ *    ("venueCode" also matches) - all are live credentials while they last.
+ *  - "identifier": the email/phone an OTP was requested for (PII, and pairing
+ *    it with a logged code is exactly the combination to keep apart).
+ */
+const SENSITIVE_KEY_PARTS = [
+  "password",
+  "token",
+  "secret",
+  "auth",
+  "key",
+  "credit",
+  "ssn",
+  "code",
+  "otp",
+  "facescan",
+  "descriptor",
+  "identifier",
+];
+
+const isSensitiveKey = (key) =>
+  SENSITIVE_KEY_PARTS.some((part) => key.toLowerCase().includes(part));
+
+export const sanitizeErrorData = (data) => {
   if (!data) return data;
 
-  if (typeof data === "object" && data !== null) {
+  if (Array.isArray(data)) {
+    return data.map((entry) => sanitizeErrorData(entry));
+  }
+
+  if (typeof data === "object") {
     const sanitized = {};
 
     Object.entries(data).forEach(([key, value]) => {
-      if (
-        ["password", "token", "secret", "auth", "key", "credit", "ssn"].some(
-          (k) => key.toLowerCase().includes(k)
-        )
-      ) {
+      if (isSensitiveKey(key)) {
         sanitized[key] = "[REDACTED]";
       } else if (typeof value === "object" && value !== null) {
         sanitized[key] = sanitizeErrorData(value);
@@ -166,13 +194,19 @@ export const errorHandler = (error, req, res, _next) => {
     requestId: req.requestId,
   };
 
+  // The machine-readable code is part of the API contract and MUST survive in
+  // production: the client refreshes its session on TOKEN_EXPIRED but logs out
+  // on INVALID_TOKEN. Stripping it here left the browser unable to tell them
+  // apart, so no session was ever refreshed in production. It classifies the
+  // failure and carries no sensitive detail (unlike stack/errorId/context).
+  if (code) errorResponse.code = code;
+
   if (context && code === "VALIDATION_ERROR") {
     errorResponse.details = context;
   }
 
   if (!isProduction) {
     errorResponse.errorId = errorId;
-    if (code) errorResponse.code = code;
     if (context && !errorResponse.details) errorResponse.details = context;
   }
 
