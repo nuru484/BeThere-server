@@ -13,6 +13,7 @@ import dashboardRoutes from "./dashboard/index.js";
 import passwordResetRoutes from "./password-reset.js";
 import reportsRouter from "./attendance-reports.js";
 import detectiveRoutes from "./detective.js";
+import pairingRoutes from "./pairing.js";
 
 routes.use("/auth", authRoutes);
 routes.use("/events", eventRoutes);
@@ -27,5 +28,6 @@ routes.use("/dashboard", dashboardRoutes);
 routes.use("/password-reset", passwordResetRoutes);
 routes.use("/attendance-reports", reportsRouter);
 routes.use("/review", detectiveRoutes);
+routes.use("/pairing", pairingRoutes);
 
 export default routes;

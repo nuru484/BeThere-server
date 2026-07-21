@@ -273,6 +273,37 @@ export const faceEnrollStepLimiter = rateLimit({
 });
 
 /**
+ * Cross-device pairing. Starting a hand-off (and the phone reading its context)
+ * is cheap; the laptop then POLLS the status on a short interval, so that bucket
+ * is deliberately roomy for a few minutes of 2s polling per pairing.
+ */
+export const pairingStartLimiter = rateLimit({
+  store: createStore("rl:pairing-start:"),
+  keyGenerator: perPrincipal,
+  passOnStoreError: true,
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
+  message: rateLimitResponse(
+    "Too many pairing attempts. Please wait a few minutes and try again."
+  ),
+});
+
+export const pairingPollLimiter = rateLimit({
+  store: createStore("rl:pairing-poll:"),
+  keyGenerator: perPrincipal,
+  passOnStoreError: true,
+  windowMs: 15 * 60 * 1000,
+  max: 400,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
+  message: rateLimitResponse("Slow down and try again in a moment."),
+});
+
+/**
  * Refresh endpoint: a JWT verify + DB lookups per hit and the surface a stolen
  * token would be replayed against. Generous enough for normal 30-min rotation,
  * tight enough to stop rapid probing.

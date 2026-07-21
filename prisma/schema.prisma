@@ -277,6 +277,40 @@ model LivenessChallenge {
   @@index([expiresAt])
 }
 
+enum PairingScope {
+  ATTENDANCE
+  ENROLL
+}
+
+enum PairingStatus {
+  PENDING
+  COMPLETED
+  EXPIRED
+}
+
+// Cross-device "scan from phone" hand-off. A laptop (cookie-authenticated)
+// starts a pairing; the phone opens a QR-deep-link carrying a short-lived signed
+// hand-off token scoped to ONLY this capture, does the scan, and marks the
+// session COMPLETED. The laptop polls the row to learn it finished. The token is
+// never a full session - it works only on the /pairing capture endpoints.
+model PairingSession {
+  id          String        @id @default(uuid())
+  userId      Int
+  scope       PairingScope
+  // The event to check in/out of (ATTENDANCE only; null for ENROLL).
+  eventId     Int?
+  // "in" | "out" for attendance, "enroll" for enrollment.
+  mode        String        @default("in")
+  status      PairingStatus @default(PENDING)
+  expiresAt   DateTime
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
 enum AnomalyType {
   DUPLICATE_DESCRIPTOR
   LIVENESS_FAILED

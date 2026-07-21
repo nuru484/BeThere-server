@@ -17,6 +17,7 @@ import { cleanupExpiredResetTokens } from "./password-reset.service.js";
 import { cleanupExpiredOtpCodes } from "./otp.service.js";
 import { cleanupExpiredRefreshTokens } from "./auth.service.js";
 import { cleanupExpiredChallenges } from "./liveness-challenge.service.js";
+import { cleanupExpiredPairings } from "./pairing.service.js";
 import { purgeExpiredEvidence } from "./attendance-evidence.service.js";
 import { cleanupOldAuditLogs } from "./audit.service.js";
 
@@ -84,6 +85,7 @@ export async function runRetention() {
     otpCodes: cleanupExpiredOtpCodes,
     refreshTokens: cleanupExpiredRefreshTokens,
     challenges: cleanupExpiredChallenges,
+    pairings: cleanupExpiredPairings,
     evidence: purgeExpiredEvidence,
     dormantTemplates: purgeDormantTemplates,
     auditLogs: () => cleanupOldAuditLogs(daysAgo(AUDIT_LOG_RETENTION_DAYS)),
