@@ -260,6 +260,14 @@ model LivenessChallenge {
   nonce      String    @unique
   // Ordered action codes, e.g. ["TURN_LEFT", "BLINK", "SMILE"].
   actions    Json
+  // Step-by-step flow: the index of the next action to prove (0..actions.length).
+  // The batch flow never advances it. Advanced atomically per verified step.
+  currentStep Int      @default(0)
+  // Encrypted (owner-bound, AES-256-GCM) cross-step state for the step-by-step
+  // flow: the per-step medoid descriptors gathered so far and the first turn's
+  // sign. Null for batch challenges. Biometrics never sit here in plaintext, and
+  // the row is short-lived (deleted on consume / by the retention sweep).
+  stateEnc   String?
   expiresAt  DateTime
   consumedAt DateTime?
 

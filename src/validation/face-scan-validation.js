@@ -26,3 +26,21 @@ export const faceScanValidation = [
     .withMessage("Consent must be true or false.")
     .toBoolean(),
 ];
+
+/**
+ * Step-by-step enrollment upload. Consent is captured on the first step (the
+ * service enforces it there), so it is optional per-request here; only the step
+ * token is always required.
+ */
+export const faceScanStepValidation = [
+  body("challengeToken")
+    .exists({ checkFalsy: true })
+    .withMessage("A liveness challenge is required to enroll your face.")
+    .isString()
+    .withMessage("Invalid liveness challenge."),
+  body("consent")
+    .optional()
+    .isBoolean()
+    .withMessage("Consent must be true or false.")
+    .toBoolean(),
+];

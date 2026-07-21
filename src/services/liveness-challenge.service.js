@@ -13,8 +13,12 @@ import { prisma } from "../config/prisma-client.js";
 import { UnauthorizedError } from "../middleware/error-handler.js";
 import { LIVENESS } from "../config/constants.js";
 import { JWT_ALGORITHMS } from "../utils/verify-jwt-token.js";
+import { decryptTemplate, encryptTemplate } from "../utils/biometric-crypto.js";
 
 const PURPOSE = "LIVENESS_CHALLENGE";
+// Step-by-step challenges carry a distinct purpose so a step token can never be
+// replayed into the batch endpoint (or vice versa).
+const STEP_PURPOSE = "LIVENESS_STEP";
 
 /** Fisher-Yates draw of n distinct actions using a CSPRNG. */
 function drawActions(n) {
@@ -123,6 +127,145 @@ export async function consumeChallenge({
   }
 
   return { actions: row.actions };
+}
+
+/**
+ * Issues a STEP-BY-STEP challenge: the same randomized action draw, but the
+ * client proves one action per upload and the server verifies each before the
+ * next is prompted. The row tracks currentStep and (encrypted) cross-step state;
+ * the token is longer-lived than a batch challenge because the flow spans
+ * several verified round-trips. Returns the actions, the first action to prove,
+ * and the signed step token.
+ */
+export async function issueStepChallenge({
+  userId,
+  eventId = null,
+  mode = "in",
+}) {
+  const actions = drawActions(LIVENESS.ACTIONS_PER_CHALLENGE);
+  const nonce = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + LIVENESS.STEP_CHALLENGE_TTL_MS);
+
+  await prisma.livenessChallenge.create({
+    data: { userId, eventId, nonce, actions, expiresAt, currentStep: 0 },
+  });
+
+  const token = jwt.sign(
+    { userId, eventId, nonce, mode, purpose: STEP_PURPOSE },
+    ENV.ACCESS_TOKEN_SECRET,
+    { expiresIn: Math.floor(LIVENESS.STEP_CHALLENGE_TTL_MS / 1000) }
+  );
+
+  return {
+    actions,
+    challengeToken: token,
+    currentStep: 0,
+    nextAction: actions[0],
+    totalSteps: actions.length,
+    expiresAt,
+  };
+}
+
+const emptyStepState = () => ({ descriptors: [], firstTurnSign: null });
+
+/**
+ * Verifies a step token and loads the LIVE challenge row WITHOUT consuming it,
+ * decrypting the accumulated cross-step state. Throws (as an expired/spent
+ * challenge) when the token is bad, the row is gone, expired, or already
+ * consumed. The caller runs the ML for actions[currentStep] and then advances.
+ */
+export async function loadStepChallenge({
+  token,
+  userId,
+  eventId = null,
+  mode = "in",
+}) {
+  let decoded;
+  try {
+    decoded = jwt.verify(token, ENV.ACCESS_TOKEN_SECRET, {
+      algorithms: JWT_ALGORITHMS,
+    });
+  } catch {
+    throw new UnauthorizedError(
+      "Your scan session expired. Please start the scan again.",
+      { code: "CHALLENGE_EXPIRED" }
+    );
+  }
+
+  if (
+    decoded?.purpose !== STEP_PURPOSE ||
+    decoded.userId !== userId ||
+    decoded.eventId !== eventId ||
+    (decoded.mode ?? "in") !== mode ||
+    !decoded.nonce
+  ) {
+    throw new UnauthorizedError("Invalid scan challenge.", {
+      code: "CHALLENGE_INVALID",
+    });
+  }
+
+  const row = await prisma.livenessChallenge.findUnique({
+    where: { nonce: decoded.nonce },
+    select: {
+      actions: true,
+      currentStep: true,
+      stateEnc: true,
+      consumedAt: true,
+      expiresAt: true,
+    },
+  });
+
+  if (!row || row.consumedAt || row.expiresAt <= new Date()) {
+    throw new UnauthorizedError(
+      "This scan session was already completed or has expired. Please start again.",
+      { code: "CHALLENGE_CONSUMED" }
+    );
+  }
+
+  const state = row.stateEnc
+    ? decryptTemplate(row.stateEnc, { userId })
+    : emptyStepState();
+
+  return {
+    nonce: decoded.nonce,
+    actions: row.actions,
+    currentStep: row.currentStep,
+    state,
+  };
+}
+
+/**
+ * Atomically advances a step-by-step challenge from `fromStep` to the next,
+ * persisting the (re-encrypted) accumulated state. The guarded updateMany means
+ * a duplicate or out-of-order submit of the same step loses the race and reads
+ * 0, so a step can never be double-counted. On the final step it also stamps
+ * consumedAt, making the whole challenge single-use. Returns whether it won.
+ */
+export async function advanceStep({
+  nonce,
+  userId,
+  fromStep,
+  state,
+  done = false,
+}) {
+  const data = {
+    currentStep: fromStep + 1,
+    stateEnc: encryptTemplate(state, { userId }),
+  };
+  if (done) data.consumedAt = new Date();
+
+  const advanced = await prisma.livenessChallenge.updateMany({
+    where: {
+      nonce,
+      userId,
+      currentStep: fromStep,
+      consumedAt: null,
+      expiresAt: { gt: new Date() },
+    },
+    data,
+  });
+
+  return advanced.count > 0;
 }
 
 /** Retention: drops expired/consumed challenge rows. Returns the count. */

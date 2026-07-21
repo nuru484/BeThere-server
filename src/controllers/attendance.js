@@ -6,13 +6,14 @@ import { asyncHandler } from "../middleware/error-handler.js";
 import { HTTP_STATUS_CODES } from "../config/constants.js";
 import { validationMiddleware } from "../validation/validation-error-handler.js";
 import {
+  attendanceStepValidation,
   createAttendanceValidation,
   createChallengeValidation,
   updateAttendanceValidation,
 } from "../validation/attendance-validation.js";
 import { parsePagination } from "../utils/pagination.js";
 import { parseId } from "../utils/parse-id.js";
-import { framesOrThrow } from "../utils/liveness-frames.js";
+import { framesOrThrow, stepFramesOrThrow } from "../utils/liveness-frames.js";
 import * as attendanceService from "../services/attendance.service.js";
 import { assertAttendant } from "../utils/authorization.js";
 import * as attendanceQueryService from "../services/attendance-query.service.js";
@@ -96,6 +97,89 @@ const handleUpdateAttendance = asyncHandler(async (req, res, _next) => {
 export const updateAttendance = [
   validationMiddleware.create(updateAttendanceValidation),
   handleUpdateAttendance,
+];
+
+// Step-by-step step 1: preflight + issue a step challenge (mode "in"/"out").
+const handleCreateStepChallenge = asyncHandler(async (req, res, _next) => {
+  assertAttendant(req.user, "Only attendants can mark attendance.");
+  const eventId = parseId(req.params.eventId, "Valid event ID is required.");
+  const { venueCode, mode } = req.body;
+
+  const challenge = await attendanceService.prepareAttendanceStepChallenge(
+    parseInt(req.user.id),
+    eventId,
+    { venueCode, mode: mode === "out" ? "out" : "in" }
+  );
+
+  res.status(HTTP_STATUS_CODES.OK).json({
+    message: "Step-by-step scan started. Perform the first action.",
+    data: challenge,
+  });
+});
+
+export const createAttendanceStepChallenge = [
+  validationMiddleware.create(createChallengeValidation),
+  handleCreateStepChallenge,
+];
+
+// Step-by-step check-in: verify ONE action; advance or commit on the last step.
+const handleStepCheckIn = asyncHandler(async (req, res, _next) => {
+  assertAttendant(req.user, "Only attendants can check in.");
+  const eventId = parseId(req.params.eventId, "Valid event ID is required.");
+  const frameBuffers = stepFramesOrThrow(req.files);
+
+  const result = await attendanceService.stepCheckIn(
+    parseInt(req.user.id),
+    eventId,
+    {
+      challengeToken: req.body.challengeToken,
+      venueCode: req.body.venueCode,
+      frameBuffers,
+      ip: req.ip,
+    }
+  );
+
+  res.status(result.done ? HTTP_STATUS_CODES.CREATED : HTTP_STATUS_CODES.OK).json({
+    message: result.done
+      ? `Attendance marked successfully as ${result.attendance.status}.`
+      : "Action verified. Perform the next action.",
+    data: result,
+  });
+});
+
+export const stepCheckIn = [
+  validationMiddleware.create(attendanceStepValidation),
+  handleStepCheckIn,
+];
+
+// Step-by-step check-out: same, over the check-out challenge.
+const handleStepCheckOut = asyncHandler(async (req, res, _next) => {
+  assertAttendant(req.user, "Only attendants can check out.");
+  const eventId = parseId(req.params.eventId, "Valid event ID is required.");
+  const frameBuffers = stepFramesOrThrow(req.files);
+
+  const result = await attendanceService.stepCheckOut(
+    parseInt(req.user.id),
+    eventId,
+    {
+      challengeToken: req.body.challengeToken,
+      venueCode: req.body.venueCode,
+      frameBuffers,
+      ip: req.ip,
+    }
+  );
+
+  res.status(HTTP_STATUS_CODES.OK).json({
+    message: result.done
+      ? "Successfully checked out of the session."
+      : "Action verified. Perform the next action.",
+    data: result,
+  });
+});
+
+export const stepCheckOut = [
+  validationMiddleware.create(attendanceStepValidation),
+  handleStepCheckOut,
 ];
 
 export const getUserAttendance = asyncHandler(async (req, res) => {

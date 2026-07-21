@@ -1,6 +1,8 @@
 import {
   addFaceScan,
   createEnrollmentChallenge,
+  createEnrollmentStepChallenge,
+  stepEnrollFaceScan,
   getUserFaceScan,
   deleteUserFaceScan,
 } from "../controllers/index.js";
@@ -10,6 +12,7 @@ import { LIVENESS } from "../config/constants.js";
 import {
   faceChallengeLimiter,
   faceEnrollmentLimiter,
+  faceEnrollStepLimiter,
 } from "../middleware/rate-limit.js";
 import { authorizeRole } from "../middleware/authorize-role.js";
 import { authenticateJWT } from "../middleware/jwt-authentication.js";
@@ -38,6 +41,26 @@ router.post(
   frameUpload.array("frames", LIVENESS.MAX_FRAMES),
   validateImageUploads,
   ...addFaceScan
+);
+
+// Step-by-step enrollment. Step 1: mint the step challenge.
+router.post(
+  "/step-challenge",
+  authenticateJWT,
+  faceChallengeLimiter,
+  authorizeRole(["USER"]),
+  createEnrollmentStepChallenge
+);
+
+// Per-action enrollment uploads: one dense single-action burst per request.
+router.post(
+  "/step",
+  authenticateJWT,
+  faceEnrollStepLimiter,
+  authorizeRole(["USER"]),
+  frameUpload.array("frames", LIVENESS.MAX_STEP_FRAMES),
+  validateImageUploads,
+  ...stepEnrollFaceScan
 );
 
 router.get(

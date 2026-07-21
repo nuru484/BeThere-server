@@ -23,7 +23,13 @@ import {
 import { isFaceDescriptor } from "../utils/face-match.js";
 import { decryptTemplate } from "../utils/biometric-crypto.js";
 import { eventCalendarDay, todayAtEventTime } from "../utils/time-context.js";
-import { consumeChallenge, issueChallenge } from "./liveness-challenge.service.js";
+import {
+  advanceStep,
+  consumeChallenge,
+  issueChallenge,
+  issueStepChallenge,
+  loadStepChallenge,
+} from "./liveness-challenge.service.js";
 import { getLivenessVerifier } from "./liveness/liveness-verifier.js";
 import { storeEvidence } from "./attendance-evidence.service.js";
 import { flagAnomaly } from "./anomaly.service.js";
@@ -160,6 +166,78 @@ const UPLOAD_SKEW_WINDOWS =
   VENUE_CODE.SKEW_WINDOWS +
   Math.ceil(LIVENESS.CHALLENGE_TTL_MS / VENUE_CODE.PERIOD_MS);
 
+// The step-by-step flow spans several verified round-trips, so its final commit
+// accepts a venue code across the whole step-challenge lifetime plus skew. The
+// challenge is single-use and presence was first proven at the preflight, so
+// this wider window cannot be relayed and reused.
+const STEP_UPLOAD_SKEW_WINDOWS =
+  VENUE_CODE.SKEW_WINDOWS +
+  Math.ceil(LIVENESS.STEP_CHALLENGE_TTL_MS / VENUE_CODE.PERIOD_MS);
+
+/** Friendly, action-specific retry copy for a failed step. */
+function stepFailureMessage(action) {
+  switch (action) {
+    case "BLINK":
+      return "We didn't catch your blink. Look at the camera and blink clearly, then try this step again.";
+    case "SMILE":
+      return "We didn't catch your smile. Smile clearly at the camera, then try this step again.";
+    case "TURN_LEFT":
+      return "We didn't catch you turning left. Turn your head clearly to the side, then try this step again.";
+    case "TURN_RIGHT":
+      return "We didn't catch you turning right. Turn your head clearly to the side, then try this step again.";
+    default:
+      return "We couldn't verify that action. Follow the on-screen prompt and try this step again.";
+  }
+}
+
+/**
+ * Records a failed step attempt the same way a failed batch attempt is recorded
+ * (flagged evidence + anomaly + audit), so the integrity dashboards see step
+ * failures too. Never throws - a bookkeeping failure must not mask the step
+ * result the caller is about to return.
+ */
+async function recordStepFailure({
+  userId,
+  eventId,
+  action,
+  verdict,
+  frameBuffers,
+  ip,
+  auditAction,
+}) {
+  const replaySuspected = verdict.reasons?.includes("replay_suspected") ?? false;
+  const evidence = await storeEvidence({
+    userId,
+    eventId,
+    frameBuffers,
+    livenessScore: verdict.score ?? null,
+    matchDistance: verdict.matchDistance ?? null,
+    reason: verdict.reasons?.join(",") ?? "",
+  }).catch((error) => {
+    logger.error(error, "Failed to store step-failure evidence");
+    return null;
+  });
+
+  await flagAnomaly({
+    userId,
+    eventId,
+    type: replaySuspected ? "REPLAY_SUSPECTED" : "LIVENESS_FAILED",
+    severity: replaySuspected ? "HIGH" : "MEDIUM",
+    detail: { action, step: true, reasons: verdict.reasons },
+    evidenceId: evidence?.id ?? null,
+  }).catch((error) => logger.error(error, "Failed to flag step anomaly"));
+
+  await recordAudit({
+    actorKind: "USER",
+    actorId: userId,
+    action: auditAction,
+    targetType: "Event",
+    targetId: eventId,
+    metadata: { action, reasons: verdict.reasons, step: true },
+    ip,
+  }).catch((error) => logger.error(error, "Failed to audit step failure"));
+}
+
 /** Validates the scanned rotating venue code against the event's secret. */
 async function assertValidVenueCode(eventId, venueCode, { skewWindows } = {}) {
   const secret = await ensureVenueSecret(eventId);
@@ -269,11 +347,7 @@ async function runLivenessOrThrow({ userId, eventId, enrolled, actions, frameBuf
  * state - BEFORE issuing a challenge or spending any ML. Returns the randomized
  * actions + signed, mode-scoped challenge token.
  */
-export async function prepareAttendanceChallenge(
-  userId,
-  eventId,
-  { venueCode, mode = "in" }
-) {
+async function assertAttendancePreflight(userId, eventId, { venueCode, mode }) {
   const user = await findUserOrThrow(userId);
   assertEnrolled(user);
   assertConsentCurrent(user);
@@ -301,8 +375,28 @@ export async function prepareAttendanceChallenge(
   } else if (existing) {
     throw new ConflictError("You have already checked in for this session.");
   }
+}
 
+export async function prepareAttendanceChallenge(
+  userId,
+  eventId,
+  { venueCode, mode = "in" }
+) {
+  await assertAttendancePreflight(userId, eventId, { venueCode, mode });
   return issueChallenge({ userId, eventId, mode });
+}
+
+/**
+ * Step-by-step variant of the preflight: identical gates, but issues a
+ * step-by-step challenge the client proves one action at a time.
+ */
+export async function prepareAttendanceStepChallenge(
+  userId,
+  eventId,
+  { venueCode, mode = "in" }
+) {
+  await assertAttendancePreflight(userId, eventId, { venueCode, mode });
+  return issueStepChallenge({ userId, eventId, mode });
 }
 
 /**
@@ -467,4 +561,187 @@ export async function checkOut(
   ]);
 
   return updated;
+}
+
+/**
+ * Verifies ONE action of a step-by-step check-in or check-out. The client
+ * uploads a dense single-action burst; the server proves just actions[step],
+ * advances the challenge, and reports the next action - or, on the final step,
+ * re-proves presence and commits the attendance record. A failed step does NOT
+ * advance, so the user keeps being shown that same action until they perform it.
+ */
+async function verifyAttendanceStep(userId, eventId, mode, payload) {
+  const { frameBuffers, challengeToken, venueCode, ip } = payload;
+  const user = await findUserOrThrow(userId);
+  const enrolled = resolveEnrolledDescriptor(user);
+
+  const { nonce, actions, currentStep, state } = await loadStepChallenge({
+    token: challengeToken,
+    userId,
+    eventId,
+    mode,
+  });
+
+  if (currentStep >= actions.length) {
+    throw new ConflictError("This scan is already complete.");
+  }
+
+  const action = actions[currentStep];
+  const isLast = currentStep === actions.length - 1;
+  const auditKind = mode === "out" ? "CHECK_OUT" : "CHECK_IN";
+  const now = new Date();
+
+  // Presence + attendance-state are re-proven only at the FINAL commit: the step
+  // token authenticates the intermediate steps, and re-anchoring presence to the
+  // moment of the write keeps a relayed code from ever producing a record.
+  let event;
+  let currentSession;
+  let status;
+  let existingAttendance;
+  if (isLast) {
+    await assertValidVenueCode(eventId, venueCode, {
+      skewWindows: STEP_UPLOAD_SKEW_WINDOWS,
+    });
+    event = await findEventOrThrow(eventId);
+
+    if (mode === "out") {
+      currentSession = await resolveActiveSession(eventId, now);
+      if (!currentSession) {
+        throw new NotFoundError(
+          "No active session found for this event at the moment."
+        );
+      }
+      existingAttendance = await prisma.attendance.findUnique({
+        where: { userId_sessionId: { userId, sessionId: currentSession.id } },
+      });
+      if (!existingAttendance) {
+        throw new NotFoundError(
+          "No attendance record found. You must check in to the event first."
+        );
+      }
+      if (existingAttendance.checkOutTime) {
+        throw new ConflictError("You have already checked out of this session.");
+      }
+      const sessionEndTime = todayAtEventTime(event.endTime, now);
+      if (now > sessionEndTime) {
+        throw new BadRequestError(
+          `Check-out window has closed. The check-out deadline was ${event.endTime}.`
+        );
+      }
+      if (now <= existingAttendance.checkInTime) {
+        throw new BadRequestError("Check-out time must be after check-in time.");
+      }
+    } else {
+      ({ currentSession, status } = await resolveSessionForCheckIn(event, now));
+      existingAttendance = await prisma.attendance.findUnique({
+        where: { userId_sessionId: { userId, sessionId: currentSession.id } },
+      });
+      if (existingAttendance) {
+        throw new ConflictError("You have already checked in for this session.");
+      }
+    }
+  }
+
+  const verdict = await getLivenessVerifier().verifyAction({
+    frameBuffers,
+    enrolledDescriptor: enrolled,
+    action,
+    firstTurnSign: state.firstTurnSign,
+  });
+
+  if (!verdict.passed) {
+    await recordStepFailure({
+      userId,
+      eventId,
+      action,
+      verdict,
+      frameBuffers,
+      ip,
+      auditAction: `${auditKind}_STEP_FAILED`,
+    });
+    throw new UnauthorizedError(stepFailureMessage(action), {
+      code: "STEP_FAILED",
+      context: { action, reasons: verdict.reasons },
+    });
+  }
+
+  // Check-in identity is proven against the enrolled template on every step, so
+  // only the first turn's SIGN needs to survive across steps (for the reversal
+  // check on a two-turn challenge).
+  const newState = {
+    descriptors: state.descriptors,
+    firstTurnSign: state.firstTurnSign ?? verdict.turnSign ?? null,
+  };
+
+  const advanced = await advanceStep({
+    nonce,
+    userId,
+    fromStep: currentStep,
+    state: newState,
+    done: isLast,
+  });
+  if (!advanced) {
+    throw new ConflictError(
+      "That action was already recorded. Please continue with the next step."
+    );
+  }
+
+  if (!isLast) {
+    return {
+      done: false,
+      currentStep: currentStep + 1,
+      nextAction: actions[currentStep + 1],
+      totalSteps: actions.length,
+    };
+  }
+
+  // Final step passed: commit the record + its audit entry atomically.
+  if (mode === "out") {
+    const [updated] = await prisma.$transaction([
+      prisma.attendance.update({
+        where: { userId_sessionId: { userId, sessionId: currentSession.id } },
+        data: { checkOutTime: now },
+        include: ATTENDANCE_INCLUDE,
+      }),
+      auditLogWrite({
+        actorKind: "USER",
+        actorId: userId,
+        action: "CHECK_OUT",
+        targetType: "Event",
+        targetId: eventId,
+        metadata: { sessionId: currentSession.id, stepwise: true },
+        ip,
+      }),
+    ]);
+    return { done: true, attendance: updated };
+  }
+
+  const [attendance] = await prisma.$transaction([
+    prisma.attendance.create({
+      data: { userId, sessionId: currentSession.id, checkInTime: now, status },
+      include: ATTENDANCE_INCLUDE,
+    }),
+    prisma.user.update({
+      where: { id: userId },
+      data: { faceLastUsedAt: now },
+    }),
+    auditLogWrite({
+      actorKind: "USER",
+      actorId: userId,
+      action: "CHECK_IN",
+      targetType: "Event",
+      targetId: eventId,
+      metadata: { status, sessionId: currentSession.id, stepwise: true },
+      ip,
+    }),
+  ]);
+  return { done: true, attendance };
+}
+
+export function stepCheckIn(userId, eventId, payload) {
+  return verifyAttendanceStep(userId, eventId, "in", payload);
+}
+
+export function stepCheckOut(userId, eventId, payload) {
+  return verifyAttendanceStep(userId, eventId, "out", payload);
 }

@@ -48,9 +48,21 @@ export const LIVENESS = {
   // window to ~3 minutes. Do not raise it without re-checking the derived
   // upload skew.
   CHALLENGE_TTL_MS: 60 * 1000,
-  // Frame bounds for one capture upload.
+  // Frame bounds for one BATCH capture upload (the legacy single-shot flow that
+  // proves all actions from one burst).
   MIN_FRAMES: 6,
   MAX_FRAMES: 16,
+  // Frame bounds for ONE STEP of the step-by-step flow: a dense burst capturing
+  // a single action. Fewer frames than a batch (one action, not three) but
+  // sampled fast enough to catch a ~200ms blink.
+  MIN_STEP_FRAMES: 4,
+  MAX_STEP_FRAMES: 12,
+  // Lifetime of a step-by-step challenge. The user performs each action, waits
+  // for the server to verify it, then does the next - so the whole flow takes
+  // longer than a single batch upload. Presence (the venue code) is re-proven at
+  // the FINAL commit with a skew window sized to this, and the challenge is
+  // single-use, so the wider window does not let a code be relayed and reused.
+  STEP_CHALLENGE_TTL_MS: 5 * 60 * 1000,
   // Head-yaw magnitude (from estimateYaw, ~degrees) that counts as a deliberate
   // turn. The proxy under-reads moderate turns (both cheek landmarks foreshorten
   // as the head rotates), and a user turning to a laptop webcam held at arm's

@@ -229,6 +229,175 @@ function proveActionsInOrder(frames, actions) {
   return failed;
 }
 
+/** Sign of the most-turned frame in a burst (+1 one way, -1 the other). */
+function stepTurnSign(frames) {
+  let extreme = 0;
+  for (const f of frames) {
+    if (Math.abs(f.yaw ?? 0) > Math.abs(extreme)) extreme = f.yaw ?? 0;
+  }
+  return extreme >= 0 ? 1 : -1;
+}
+
+/**
+ * Proves a SINGLE action from one dense per-step burst. Unlike the batch flow,
+ * the frames here were captured specifically for this one action, so a blink is
+ * sampled tightly enough to catch its ~200ms dip and a turn brackets forward ->
+ * turned within the step. Returns true when the action is demonstrated.
+ */
+function proveSingleAction(frames, action) {
+  if (action === "BLINK") {
+    const { closed, reopened } = blinkThresholds(frames);
+    let closedAt = -1;
+    for (let i = 0; i < frames.length; i++) {
+      if ((frames[i].ear ?? 0) < closed) {
+        closedAt = i;
+        break;
+      }
+    }
+    if (closedAt === -1) return false;
+    for (let i = closedAt + 1; i < frames.length; i++) {
+      if ((frames[i].ear ?? 0) > reopened) return true;
+    }
+    return false;
+  }
+
+  if (action === "SMILE") {
+    return frames.some((f) => (f.happy ?? 0) >= LIVENESS.SMILE_PROBABILITY);
+  }
+
+  if (isTurn(action)) {
+    // A held photo at an angle has one fixed yaw (range 0); a real turn sweeps
+    // from near-forward to turned, so the excursion - not just the peak - proves
+    // the movement.
+    const turned = frames.some(
+      (f) => Math.abs(f.yaw ?? 0) >= LIVENESS.YAW_TURN_DEGREES
+    );
+    return turned && signalRange(frames, "yaw") >= LIVENESS.YAW_TURN_DEGREES;
+  }
+
+  return false;
+}
+
+/**
+ * The step-by-step DECISION for ONE action. Pure like evaluateLiveness, but
+ * scoped to a single action's dense capture, so the client can verify each step
+ * before prompting the next.
+ *
+ * Identity is re-checked on every step: against the ENROLLED template for a
+ * check-in (so no step can be a different person), and against the step-0
+ * REFERENCE descriptor for enrollment (which has no template yet). A two-turn
+ * challenge passes the FIRST turn's sign back in; the opposite turn must reverse
+ * it. Returns the step verdict plus the medoid descriptor (accumulated across
+ * steps to derive the enrollment template) and this step's turn sign.
+ *
+ * @returns { passed, reasons, descriptor, turnSign, matchDistance }
+ */
+export function evaluateAction(
+  frames,
+  action,
+  { enrolled = null, reference = null, firstTurnSign = null, matchThreshold }
+) {
+  const reasons = [];
+  const add = (reason) => {
+    if (!reasons.includes(reason)) reasons.push(reason);
+  };
+
+  if (frames.length < LIVENESS.MIN_STEP_FRAMES) {
+    return {
+      passed: false,
+      reasons: ["insufficient_usable_frames"],
+      descriptor: null,
+      turnSign: null,
+      matchDistance: null,
+    };
+  }
+
+  // --- Identity against the enrolled template (check-in only). ---
+  let matchDistance = null;
+  if (enrolled) {
+    const distances = frames.map((f) =>
+      euclideanDistance(f.descriptor, enrolled)
+    );
+    matchDistance = Math.min(...distances);
+    if (matchDistance <= LIVENESS.REPLAY_MIN_DISTANCE) add("replay_suspected");
+    if (distances.filter((d) => d <= matchThreshold).length / frames.length < 0.6) {
+      add("identity_mismatch");
+    }
+    if (distances.some((d) => d > LIVENESS.CONTINUITY_MAX_DISTANCE)) {
+      add("identity_discontinuity");
+    }
+  }
+
+  // --- Identity against the step-0 reference (enrollment continuity). ---
+  if (reference) {
+    const distances = frames.map((f) =>
+      euclideanDistance(f.descriptor, reference)
+    );
+    if (distances.filter((d) => d <= matchThreshold).length / frames.length < 0.6) {
+      add("identity_mismatch");
+    }
+    if (distances.some((d) => d > LIVENESS.CONTINUITY_MAX_DISTANCE)) {
+      add("identity_discontinuity");
+    }
+  }
+
+  // --- One person WITHIN this step (no mid-step swap). ---
+  const centre = frames[medoidIndex(frames)].descriptor;
+  const clustered = frames.filter(
+    (f) => euclideanDistance(f.descriptor, centre) <= matchThreshold
+  ).length;
+  if (clustered / frames.length < 0.6) add("inconsistent_identity");
+
+  if (hasDuplicateFrames(frames)) add("duplicate_frames");
+  if (distinctRatio(frames) < LIVENESS.MIN_DISTINCT_RATIO) {
+    add("insufficient_variation");
+  }
+
+  // --- The action itself. ---
+  if (!proveSingleAction(frames, action)) add("action_not_satisfied");
+
+  let turnSign = null;
+  if (isTurn(action)) {
+    turnSign = stepTurnSign(frames);
+    // A second turn must reverse the first - the part no still can fake.
+    if (firstTurnSign !== null && turnSign === firstTurnSign) {
+      add("action_not_satisfied");
+    }
+  }
+
+  const passed = reasons.length === 0;
+  return {
+    passed,
+    reasons,
+    descriptor: passed ? centre : null,
+    turnSign,
+    matchDistance,
+  };
+}
+
+/**
+ * Derives the enrollment template from the per-step medoid descriptors gathered
+ * across a completed step-by-step enrollment, and proves they are one
+ * self-consistent person. Mirrors evaluateEnrollment's clustering guarantee for
+ * the stepwise flow.
+ *
+ * @returns { passed, reasons, descriptor }
+ */
+export function finalizeEnrollment(stepDescriptors, matchThreshold) {
+  if (!Array.isArray(stepDescriptors) || stepDescriptors.length === 0) {
+    return { passed: false, reasons: ["insufficient_usable_frames"], descriptor: null };
+  }
+  const asFrames = stepDescriptors.map((descriptor) => ({ descriptor }));
+  const centre = stepDescriptors[medoidIndex(asFrames)];
+  const clustered = stepDescriptors.filter(
+    (d) => euclideanDistance(d, centre) <= matchThreshold
+  ).length;
+  if (clustered / stepDescriptors.length < 0.8) {
+    return { passed: false, reasons: ["inconsistent_identity"], descriptor: null };
+  }
+  return { passed: true, reasons: [], descriptor: centre };
+}
+
 /** Index of the frame closest to all the others - the most representative
  * capture in the burst, and a real observed descriptor rather than an average
  * of poses. */

@@ -223,6 +223,56 @@ export const faceEnrollmentLimiter = rateLimit({
 });
 
 /**
+ * Step-by-step endpoints charge PER ACTION, not per attempt: one check-in or
+ * enrollment is several verified uploads (plus a retry when a step is missed).
+ * These buckets are sized for that per-step traffic so an honest multi-step scan
+ * is never throttled, while still capping the ML-on-the-request-thread cost.
+ */
+export const attendanceStepLimiter = rateLimit({
+  store: createStore("rl:attendance-step:"),
+  keyGenerator: perPrincipal,
+  passOnStoreError: true,
+  windowMs: 15 * 60 * 1000,
+  // ~3 actions/scan + retries: 60 covers many honest scans per window.
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
+  handler: async (req, res) => {
+    if (req.user?.kind === "USER") {
+      await flagAnomaly({
+        userId: Number(req.user.id),
+        type: "RAPID_ATTEMPTS",
+        severity: "MEDIUM",
+        detail: { route: req.originalUrl },
+      });
+    }
+    res
+      .status(429)
+      .json(
+        rateLimitResponse(
+          "Too many scan attempts. Please wait a few minutes and try again."
+        )
+      );
+  },
+});
+
+export const faceEnrollStepLimiter = rateLimit({
+  store: createStore("rl:enroll-step:"),
+  keyGenerator: perPrincipal,
+  passOnStoreError: true,
+  windowMs: 15 * 60 * 1000,
+  // Enrollment is once per account, but each of ~3 steps may be retried.
+  max: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTest,
+  message: rateLimitResponse(
+    "Too many face registration attempts. Please wait a few minutes and try again."
+  ),
+});
+
+/**
  * Refresh endpoint: a JWT verify + DB lookups per hit and the surface a stolen
  * token would be replayed against. Generous enough for normal 30-min rotation,
  * tight enough to stop rapid probing.

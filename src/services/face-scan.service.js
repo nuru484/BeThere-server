@@ -22,10 +22,14 @@ import { recordAudit } from "./audit.service.js";
 import logger from "../utils/logger.js";
 import { KIND_USER, toSafeUser } from "./auth.service.js";
 import {
+  advanceStep,
   issueChallenge,
+  issueStepChallenge,
+  loadStepChallenge,
   consumeChallenge,
 } from "./liveness-challenge.service.js";
 import { getEnrollmentVerifier } from "./liveness/liveness-verifier.js";
+import { finalizeEnrollment } from "./liveness/evaluate.js";
 
 const hasEnrollment = (user) => Boolean(user.faceScanEnc || user.faceScan);
 
@@ -237,6 +241,168 @@ export async function enrollFaceScan(
   // update its cached session and stop offering enrollment. The descriptor
   // itself is collapsed to the boolean by toSafeUser and never leaves.
   return { user: toSafeUser(KIND_USER, updated) };
+}
+
+/**
+ * Step 1 of STEP-BY-STEP enrollment: same fail-fast gate as the batch flow, but
+ * issues a step challenge the user proves one action at a time.
+ */
+export async function prepareEnrollmentStepChallenge(userId) {
+  const user = await prisma.user.findFirst({ where: { id: userId } });
+  if (!user) {
+    throw new NotFoundError("User not found.");
+  }
+  if (hasEnrollment(user)) {
+    throw new ConflictError(
+      "User face scan already exists. Contact an admin to reset your face scan before updating."
+    );
+  }
+  return issueStepChallenge({ userId, eventId: null, mode: ENROLL_MODE });
+}
+
+/**
+ * Verifies ONE action of a step-by-step enrollment. Each step proves its action
+ * and, from step 1 on, that it is the SAME person as the step-0 reference; the
+ * per-step medoid descriptors accumulate in the (encrypted) challenge state. On
+ * the final step the template is derived from that set, checked for
+ * cross-account duplication, and stored. A failed step does not advance.
+ */
+export async function stepEnrollFaceScan(
+  userId,
+  { frameBuffers, consent, challengeToken, ip } = {}
+) {
+  const user = await prisma.user.findFirst({ where: { id: userId } });
+  if (!user) {
+    throw new NotFoundError("User not found.");
+  }
+  if (hasEnrollment(user)) {
+    throw new ConflictError(
+      "User face scan already exists. Contact an admin to reset your face scan before updating."
+    );
+  }
+
+  const { nonce, actions, currentStep, state } = await loadStepChallenge({
+    token: challengeToken,
+    userId,
+    eventId: null,
+    mode: ENROLL_MODE,
+  });
+
+  // Consent is captured at the first step, before any biometric is derived.
+  if (currentStep === 0 && consent !== true) {
+    throw new BadRequestError(
+      "Biometric consent is required before enrolling your face."
+    );
+  }
+
+  if (currentStep >= actions.length) {
+    throw new ConflictError("This enrollment scan is already complete.");
+  }
+
+  const action = actions[currentStep];
+  const isLast = currentStep === actions.length - 1;
+  const reference = state.descriptors[0] ?? null;
+
+  const verdict = await getEnrollmentVerifier().enrollAction({
+    frameBuffers,
+    action,
+    reference,
+    firstTurnSign: state.firstTurnSign,
+    userId,
+  });
+
+  if (!verdict.passed || !isFaceDescriptor(verdict.descriptor)) {
+    await recordAudit({
+      actorKind: "USER",
+      actorId: userId,
+      action: "FACE_ENROLL_STEP_FAILED",
+      targetType: "User",
+      targetId: userId,
+      metadata: { action, reasons: verdict.reasons, step: true },
+      ip,
+    }).catch((error) => logger.error(error, "Failed to audit enroll step"));
+
+    throw new BadRequestError(
+      "We could not verify a live face for that action. Follow the prompt and try this step again.",
+      { context: { action, reasons: verdict.reasons } }
+    );
+  }
+
+  const newState = {
+    descriptors: [...state.descriptors, verdict.descriptor],
+    firstTurnSign: state.firstTurnSign ?? verdict.turnSign ?? null,
+  };
+
+  const advanced = await advanceStep({
+    nonce,
+    userId,
+    fromStep: currentStep,
+    state: newState,
+    done: isLast,
+  });
+  if (!advanced) {
+    throw new ConflictError(
+      "That action was already recorded. Please continue with the next step."
+    );
+  }
+
+  if (!isLast) {
+    return {
+      done: false,
+      currentStep: currentStep + 1,
+      nextAction: actions[currentStep + 1],
+      totalSteps: actions.length,
+    };
+  }
+
+  // Final step: derive the template from the accumulated step descriptors.
+  const derived = finalizeEnrollment(newState.descriptors, ENV.FACE_MATCH_THRESHOLD);
+  if (!derived.passed || !isFaceDescriptor(derived.descriptor)) {
+    await recordAudit({
+      actorKind: "USER",
+      actorId: userId,
+      action: "FACE_ENROLL_FAILED",
+      targetType: "User",
+      targetId: userId,
+      metadata: { reasons: derived.reasons, stepwise: true },
+      ip,
+    }).catch((error) => logger.error(error, "Failed to audit enroll finalize"));
+    throw new BadRequestError(
+      "We could not verify a consistent live face across the scan. Please start again.",
+      { context: { reasons: derived.reasons } }
+    );
+  }
+
+  await assertDescriptorNotEnrolledElsewhere(userId, derived.descriptor, ip);
+
+  const claimed = await prisma.user.updateMany({
+    where: { id: userId, faceScanEnc: null },
+    data: {
+      faceScanEnc: encryptTemplate(derived.descriptor, { userId }),
+      biometricConsentAt: new Date(),
+      biometricConsentVersion: BIOMETRIC_CONSENT_VERSION,
+      faceLastUsedAt: new Date(),
+    },
+  });
+  if (claimed.count === 0) {
+    throw new ConflictError(
+      "User face scan already exists. Contact an admin to reset your face scan before updating."
+    );
+  }
+
+  const updated = await prisma.user.findFirst({ where: { id: userId } });
+
+  await recordAudit({
+    actorKind: "USER",
+    actorId: userId,
+    action: "FACE_ENROLL",
+    targetType: "User",
+    targetId: userId,
+    metadata: { consentVersion: BIOMETRIC_CONSENT_VERSION, stepwise: true },
+    ip,
+  });
+
+  return { done: true, user: toSafeUser(KIND_USER, updated) };
 }
 
 /** Owner-or-admin enrollment status; 404 when nothing is enrolled. */

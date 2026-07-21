@@ -9,7 +9,22 @@
 //     -> { passed, score, matchDistance, reasons, failedActions, replaySuspected, disabled? }
 import crypto from "node:crypto";
 import ENV from "../../config/env.js";
-import { evaluateEnrollment, evaluateLiveness } from "./evaluate.js";
+import {
+  evaluateAction,
+  evaluateEnrollment,
+  evaluateLiveness,
+} from "./evaluate.js";
+
+/** Deterministic per-user pseudo-descriptor for the disabled (no-ML) path. */
+function pseudoDescriptor(userId) {
+  const seed = crypto
+    .createHash("sha256")
+    .update(`liveness-disabled-enrollment:${userId}`)
+    .digest();
+  return Array.from({ length: 128 }, (_, i) =>
+    Number(((seed[i % seed.length] / 255) * 0.4).toFixed(6))
+  );
+}
 
 /**
  * Self-hosted verifier: runs the face engine over the raw frames, then applies
@@ -28,6 +43,17 @@ const faceApiVerifier = {
       actions,
       ENV.FACE_MATCH_THRESHOLD
     );
+  },
+  // Step-by-step check-in: prove ONE action, identity against the enrolled
+  // template, with the first turn's sign carried in for a reversal check.
+  async verifyAction({ frameBuffers, enrolledDescriptor, action, firstTurnSign }) {
+    const { analyzeFrames } = await import("../../lib/face-engine.js");
+    const frames = await analyzeFrames(frameBuffers);
+    return evaluateAction(frames, action, {
+      enrolled: enrolledDescriptor,
+      firstTurnSign,
+      matchThreshold: ENV.FACE_MATCH_THRESHOLD,
+    });
   },
 };
 
@@ -48,6 +74,16 @@ const disabledVerifier = {
       disabled: true,
     };
   },
+  async verifyAction() {
+    return {
+      passed: true,
+      reasons: ["liveness_disabled"],
+      descriptor: null,
+      turnSign: null,
+      matchDistance: null,
+      disabled: true,
+    };
+  },
 };
 
 /**
@@ -62,6 +98,18 @@ const faceApiEnroller = {
     const frames = await analyzeFrames(frameBuffers);
     return evaluateEnrollment(frames, actions, ENV.FACE_MATCH_THRESHOLD);
   },
+  // Step-by-step enrollment: prove ONE action and, from step 1 on, that it is
+  // the SAME person as the step-0 reference. Returns this step's medoid
+  // descriptor so the caller can accumulate and derive the template at the end.
+  async enrollAction({ frameBuffers, action, reference, firstTurnSign }) {
+    const { analyzeFrames } = await import("../../lib/face-engine.js");
+    const frames = await analyzeFrames(frameBuffers);
+    return evaluateAction(frames, action, {
+      reference,
+      firstTurnSign,
+      matchThreshold: ENV.FACE_MATCH_THRESHOLD,
+    });
+  },
 };
 
 /**
@@ -74,18 +122,23 @@ const faceApiEnroller = {
  */
 const disabledEnroller = {
   async enroll({ userId }) {
-    const seed = crypto
-      .createHash("sha256")
-      .update(`liveness-disabled-enrollment:${userId}`)
-      .digest();
-    const descriptor = Array.from({ length: 128 }, (_, i) =>
-      Number(((seed[i % seed.length] / 255) * 0.4).toFixed(6))
-    );
     return {
       passed: true,
       reasons: ["liveness_disabled"],
       failedActions: [],
-      descriptor,
+      descriptor: pseudoDescriptor(userId),
+      disabled: true,
+    };
+  },
+  // Each disabled enrollment step yields the SAME per-user pseudo-descriptor, so
+  // the accumulated set trivially clusters and finalizeEnrollment derives it.
+  async enrollAction({ userId }) {
+    return {
+      passed: true,
+      reasons: ["liveness_disabled"],
+      descriptor: pseudoDescriptor(userId),
+      turnSign: null,
+      matchDistance: null,
       disabled: true,
     };
   },

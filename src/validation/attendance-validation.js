@@ -33,3 +33,8 @@ export const createAttendanceValidation = [challengeTokenRule, venueCodeRule];
 // Step 2: check-out. Same shape as check-in - it also uploads frames, runs
 // server-side liveness, and re-proves presence.
 export const updateAttendanceValidation = [challengeTokenRule, venueCodeRule];
+
+// Step-by-step: each per-action upload carries the step token and the venue
+// code (re-checked at the final step). The server is authoritative on which
+// step this is, so no step index is trusted from the client.
+export const attendanceStepValidation = [challengeTokenRule, venueCodeRule];

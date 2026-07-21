@@ -19,3 +19,20 @@ export function framesOrThrow(files) {
   }
   return uploaded.map((file) => file.buffer);
 }
+
+/**
+ * Frame-count guard for ONE step of the step-by-step flow (a single action's
+ * dense burst) - fewer frames than a full batch.
+ */
+export function stepFramesOrThrow(files) {
+  const uploaded = files ?? [];
+  if (
+    uploaded.length < LIVENESS.MIN_STEP_FRAMES ||
+    uploaded.length > LIVENESS.MAX_STEP_FRAMES
+  ) {
+    throw new ValidationError(
+      `Please capture between ${LIVENESS.MIN_STEP_FRAMES} and ${LIVENESS.MAX_STEP_FRAMES} frames for this step.`
+    );
+  }
+  return uploaded.map((file) => file.buffer);
+}
