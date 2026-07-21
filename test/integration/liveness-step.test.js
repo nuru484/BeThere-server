@@ -27,8 +27,7 @@ const stepChallenge = (path, user, body) =>
     .send(body);
 
 function submitStep(method, path, user, { token, frames = 6, venueCode, consent }) {
-  const req = request(app)
-    [method](path)
+  const req = request(app)[method](path)
     .set("Cookie", [attendantCookie(user)])
     .field("challengeToken", token ?? "");
   if (venueCode !== undefined) req.field("venueCode", venueCode);
