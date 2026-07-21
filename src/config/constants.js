@@ -84,6 +84,13 @@ export const LIVENESS = {
   // photo cannot fake this: a blink is a transition, not a holdable state.
   BLINK_CLOSE_RATIO: 0.72,
   BLINK_REOPEN_RATIO: 0.82,
+  // Step-by-step blink is proven by a DIP below the user's own open-eye
+  // baseline. Real webcam output showed the 68-point landmark EAR swings only
+  // modestly on closure (open ~0.30, a genuine blink reaching ~0.25 - a ~16%
+  // dip - not the ~0.12 an ideal closed eye would read), so the bar is a ~12%
+  // dip. A static photo re-detected yields a CONSTANT EAR (0% dip), so it still
+  // cannot pass; only an actual eye movement produces the dip.
+  BLINK_STEP_DIP_RATIO: 0.88,
   // Absolute floor used only when the burst has no plausibly-open baseline (e.g.
   // degenerate landmarks): a frame under this reads as closed regardless.
   EYE_CLOSED_EAR: 0.19,

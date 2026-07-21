@@ -246,13 +246,21 @@ function stepTurnSign(frames) {
  */
 function proveSingleAction(frames, action) {
   if (action === "BLINK") {
-    // A blink is a DIP below the user's own open-eye baseline. In a deliberate
-    // single-action capture we only require the closed frame to be present - not
-    // that a reopen frame was also captured strictly after it - because a blink
-    // at the very end of the burst would otherwise be missed, and a photo has no
-    // dip at all (constant EAR), so the dip alone is what a still cannot fake.
-    const { closed } = blinkThresholds(frames);
-    return frames.some((f) => (f.ear ?? 0) < closed);
+    // A blink is a DIP below the user's own open-eye baseline. We only require
+    // the dip to be present (not a reopen frame captured strictly after it),
+    // because a blink at the end of the burst would otherwise be missed, and a
+    // photo has no dip at all (constant EAR) so the dip alone is unfakeable.
+    // The bar is tuned to real webcam output: the 68-point EAR swings only
+    // modestly on closure, so an ideal-closed-eye threshold is unreachable.
+    const ears = frames.map((f) => f.ear ?? 0);
+    // 70th percentile as the open baseline - matches the earOpen the diagnostics
+    // report, so the dip bar lines up with observed real output.
+    const openBaseline = percentile(ears, 0.7);
+    const dip =
+      openBaseline > LIVENESS.EYE_CLOSED_EAR
+        ? openBaseline * LIVENESS.BLINK_STEP_DIP_RATIO
+        : LIVENESS.EYE_CLOSED_EAR;
+    return Math.min(...ears) < dip;
   }
 
   if (action === "SMILE") {

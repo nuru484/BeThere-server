@@ -161,6 +161,43 @@ describe("evaluateAction (check-in, identity vs enrolled)", () => {
     expect(v.passed).toBe(true);
   });
 
+  it("accepts a blink when the landmark EAR only swings modestly (real webcam)", () => {
+    // Observed production output: open EAR ~0.30, a genuine blink only reaching
+    // ~0.25 (the 68-point model barely moves on closure). The dip must still
+    // count as a blink.
+    const frames = [
+      frame({ ear: 0.3 }),
+      frame({ ear: 0.3 }),
+      frame({ ear: 0.251 }), // the deepest the model reports for the closure
+      frame({ ear: 0.29 }),
+      frame({ ear: 0.3 }),
+    ];
+    const v = evaluateAction(frames, "BLINK", {
+      enrolled: ENROLLED,
+      matchThreshold: 0.6,
+    });
+    expect(v.reasons).not.toContain("action_not_satisfied");
+    expect(v.passed).toBe(true);
+  });
+
+  it("still rejects a static photo for a blink step (constant EAR, no dip)", () => {
+    // A re-detected still yields a near-constant EAR - no dip - so it cannot
+    // pass, even though the dip bar is tuned low for real blinks.
+    const frames = Array.from({ length: 6 }, (_, i) => ({
+      descriptor: near(0.04 + i * 0.0006),
+      yaw: 2,
+      ear: 0.3, // unchanging
+      happy: 0.1,
+      score: 0.9,
+    }));
+    const v = evaluateAction(frames, "BLINK", {
+      enrolled: ENROLLED,
+      matchThreshold: 0.6,
+    });
+    expect(v.passed).toBe(false);
+    expect(v.reasons).toContain("action_not_satisfied");
+  });
+
   it("reports PII-safe signal aggregates on a failed step (no descriptors)", () => {
     const frames = [
       frame({ ear: 0.3 }),
