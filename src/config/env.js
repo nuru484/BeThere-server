@@ -242,6 +242,14 @@ const ENV = {
   GMAIL_PASSWORD: envRequired("GMAIL_PASSWORD"),
   GMAIL_USER,
 
+  /**
+   * Google Gemini for the admin analytics AI narrative. Optional: unset leaves
+   * the AI summary feature inert (the endpoint reports it is not configured
+   * rather than erroring), so nothing breaks without a key.
+   */
+  GEMINI_API_KEY: envOptional("GEMINI_API_KEY"),
+  GEMINI_MODEL: envOptional("GEMINI_MODEL") ?? "gemini-2.5-flash",
+
   /** Pino level override; defaults by NODE_ENV (silent in tests). */
   LOG_LEVEL: envOptional("LOG_LEVEL"),
 
