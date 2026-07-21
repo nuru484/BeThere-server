@@ -30,6 +30,13 @@ const dateFmt = new Intl.DateTimeFormat("en-GB", {
 const fmtInstant = (value) => (value ? dateTimeFmt.format(new Date(value)) : "");
 const fmtDate = (value) => (value ? dateFmt.format(new Date(value)) : "");
 
+// CSV/XLSX formula-injection guard. Attendee names and emails are
+// user-controlled; a value beginning with a formula trigger (= + - @ tab CR)
+// is executed as a formula by Excel/Sheets/LibreOffice when the file is
+// opened. Prefixing a single quote forces the cell to be treated as text.
+const safeCell = (value) =>
+  typeof value === "string" && /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+
 export async function buildAttendanceReportXlsx(filters) {
   const { rows, total, truncated, summary, topAttendees } =
     await getAttendanceReportForExport(filters);
@@ -70,14 +77,14 @@ export async function buildAttendanceReportXlsx(filters) {
       { header: "Status", key: "status", width: 10 },
     ],
     rows: rows.map((row) => ({
-      attendee: row.userName,
-      email: row.userEmail,
-      event: row.eventTitle,
-      type: row.eventType,
+      attendee: safeCell(row.userName),
+      email: safeCell(row.userEmail),
+      event: safeCell(row.eventTitle),
+      type: safeCell(row.eventType),
       recurring: row.isRecurring ? "Yes" : "No",
-      location: row.location?.name ?? "",
-      city: row.location?.city ?? "",
-      country: row.location?.country ?? "",
+      location: safeCell(row.location?.name ?? ""),
+      city: safeCell(row.location?.city ?? ""),
+      country: safeCell(row.location?.country ?? ""),
       sessionDate: fmtDate(row.sessionStartDate),
       checkIn: fmtInstant(row.checkInTime),
       checkOut: fmtInstant(row.checkOutTime),
@@ -95,8 +102,8 @@ export async function buildAttendanceReportXlsx(filters) {
     ],
     rows: topAttendees.map((attendee, index) => ({
       rank: index + 1,
-      name: attendee.userName,
-      email: attendee.email,
+      name: safeCell(attendee.userName),
+      email: safeCell(attendee.email),
       count: attendee.attendanceCount,
     })),
   };

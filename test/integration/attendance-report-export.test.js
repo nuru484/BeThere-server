@@ -87,6 +87,33 @@ describe("GET /attendance-reports/export", () => {
     expect(wb.getWorksheet("Records").actualRowCount).toBe(2); // header + 1
   });
 
+  it("neutralizes formula-injection in user-controlled cells", async () => {
+    const admin = await createAdmin();
+    // An attendant whose name would be a formula if written raw into a cell.
+    const evil = await prisma.user.create({
+      data: { firstName: "=HYPERLINK(\"http://evil\")", lastName: "X", email: "evil@test.local", password: "x" },
+    });
+    const location = await prisma.location.create({ data: { name: "Hall" } });
+    const event = await prisma.event.create({
+      data: { title: "Standup", startDate: utc(D1), isRecurring: false, startTime: "09:00", endTime: "17:00", locationId: location.id, type: "MEETING" },
+    });
+    const session = await prisma.session.create({
+      data: { eventId: event.id, startDate: utc(D1), endDate: utc(D1), startTime: noon(D1), endTime: noon(D1) },
+    });
+    await prisma.attendance.create({ data: { userId: evil.id, sessionId: session.id, status: "PRESENT", checkInTime: noon(D1) } });
+
+    const res = await request(app)
+      .get("/api/v1/attendance-reports/export")
+      .set("Cookie", [adminCookie(admin)])
+      .buffer()
+      .parse(binaryParser);
+
+    const wb = await loadWorkbook(res.body);
+    const attendeeCell = wb.getWorksheet("Records").getRow(2).getCell(1).value;
+    // Prefixed with a quote so the spreadsheet treats it as text, not a formula.
+    expect(attendeeCell.startsWith("'=")).toBe(true);
+  });
+
   it("is not exportable by an attendant", async () => {
     const { userA } = await seed();
     const res = await request(app)
