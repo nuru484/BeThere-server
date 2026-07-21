@@ -324,7 +324,7 @@ export async function stepEnrollFaceScan(
 
     throw new BadRequestError(
       "We could not verify a live face for that action. Follow the prompt and try this step again.",
-      { context: { action, reasons: verdict.reasons } }
+      { code: "STEP_FAILED", context: { action, reasons: verdict.reasons } }
     );
   }
 
