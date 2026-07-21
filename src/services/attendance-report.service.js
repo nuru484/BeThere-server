@@ -286,3 +286,48 @@ export async function getAttendanceReports({ skip, limit, ...filters }) {
     },
   };
 }
+
+// The most rows a single export will materialize. Reports are bounded
+// summaries, not bulk dumps; beyond this the caller should narrow the filters.
+export const EXPORT_ROW_CAP = 10000;
+
+/**
+ * The same filtered report, but ALL matching rows (up to the cap) with no
+ * pagination - the shape the xlsx export consumes. Returns `truncated` so the
+ * export can tell the user when the cap clipped the result.
+ */
+export async function getAttendanceReportForExport(filters) {
+  const whereClause = buildReportWhere(filters);
+
+  const [attendances, total, statusGroups, topAttendees] = await Promise.all([
+    prisma.attendance.findMany({
+      where: whereClause,
+      take: EXPORT_ROW_CAP,
+      orderBy: { checkInTime: { sort: "desc", nulls: "last" } },
+      include: ATTENDANCE_LIST_INCLUDE,
+    }),
+    prisma.attendance.count({ where: whereClause }),
+    prisma.attendance.groupBy({
+      by: ["status"],
+      where: whereClause,
+      _count: { _all: true },
+    }),
+    findTopAttendees(whereClause),
+  ]);
+
+  const statusCount = (status) =>
+    statusGroups.find((group) => group.status === status)?._count._all ?? 0;
+
+  return {
+    rows: attendances.map(formatReportRow),
+    total,
+    truncated: total > EXPORT_ROW_CAP,
+    topAttendees,
+    summary: {
+      totalAttendance: total,
+      presentCount: statusCount("PRESENT"),
+      lateCount: statusCount("LATE"),
+      absentCount: statusCount("ABSENT"),
+    },
+  };
+}
