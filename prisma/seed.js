@@ -104,10 +104,20 @@ async function seedDemoData() {
   const FIRST_NAMES = ["Ama", "Kofi", "Yaa", "Kwame", "Abena", "Kojo", "Esi", "Yaw", "Adwoa", "Fiifi", "Akosua", "Kwesi", "Efua", "Nana", "Maya", "Zara", "Ibrahim", "Fatima", "Musa", "Aisha", "Sena", "Elorm", "Dela", "Selorm", "Mawuli"];
   const samplePassword = await bcrypt.hash(crypto.randomBytes(24).toString("hex"), 10);
 
+  // Free stock imagery (Unsplash CDN) for event covers, and pravatar avatars
+  // for attendants, so the UI looks real.
+  const EVENT_PHOTO = {
+    MEETING: "https://images.unsplash.com/photo-1517048676732-d65bc937f952?auto=format&fit=crop&w=800&q=80",
+    CLASS: "https://images.unsplash.com/photo-1524178232363-1fb2b075b655?auto=format&fit=crop&w=800&q=80",
+    TRAINING: "https://images.unsplash.com/photo-1524178232363-1fb2b075b655?auto=format&fit=crop&w=800&q=80",
+    EVENT: "https://images.unsplash.com/photo-1505236858219-8359eb29e329?auto=format&fit=crop&w=800&q=80",
+  };
+  const avatar = (i) => `https://i.pravatar.cc/150?img=${(i % 70) + 1}`;
+
   // The demo-login attendant, enriched so its personal dashboard is rich too.
   const demoAttendant = await prisma.user.upsert({
     where: { email: ENV.DEMO_ATTENDANT_EMAIL },
-    update: { faceScanEnc: "demo-encrypted-template", faceLastUsedAt: addUtcDays(today, -1) },
+    update: { faceScanEnc: "demo-encrypted-template", faceLastUsedAt: addUtcDays(today, -1), profilePicture: avatar(0) },
     create: {
       email: ENV.DEMO_ATTENDANT_EMAIL,
       firstName: "Demo",
@@ -116,6 +126,7 @@ async function seedDemoData() {
       biometricConsentAt: addUtcDays(today, -60),
       biometricConsentVersion: "2026-07-v1",
       phoneVerified: true,
+      profilePicture: avatar(0),
     },
   });
 
@@ -130,6 +141,7 @@ async function seedDemoData() {
         update: {
           faceScanEnc: enrolled ? "demo-encrypted-template" : null,
           faceLastUsedAt: enrolled ? addUtcDays(today, -(i % 10)) : null,
+          profilePicture: avatar(i + 1),
         },
         create: {
           firstName: FIRST_NAMES[i],
@@ -141,6 +153,7 @@ async function seedDemoData() {
           biometricConsentVersion: enrolled ? "2026-07-v1" : null,
           faceLastUsedAt: enrolled ? addUtcDays(today, -(i % 10)) : null,
           phoneVerified: i % 3 !== 0,
+          profilePicture: avatar(i + 1),
         },
       })
     );
@@ -172,7 +185,7 @@ async function seedDemoData() {
   // FROM TODAY (negative = past, 0 = today, positive = future).
   const eventConfigs = [
     { title: "Morning Standup", isRecurring: true, startTime: "09:00", endTime: "11:00", type: "MEETING", loc: 1, cadence: 1, span: 45, future: 10 },
-    { title: "Weekly Sync", isRecurring: true, startTime: "14:00", endTime: "16:00", type: "MEETING", loc: 0, cadence: 7, span: 49, future: 14 },
+    { title: "Weekly Sync", isRecurring: true, startTime: "14:00", endTime: "16:00", type: "MEETING", loc: 0, cadence: 7, span: 340, future: 14 },
     { title: "Evening Class", isRecurring: true, startTime: "18:00", endTime: "20:00", type: "CLASS", loc: 2, cadence: 2, span: 40, future: 10 },
     { title: "Security Training", isRecurring: false, startTime: "10:00", endTime: "12:00", type: "TRAINING", loc: 2, offset: -12 },
     { title: "Community Meetup", isRecurring: false, startTime: "15:00", endTime: "17:00", type: "EVENT", loc: 3, offset: -3 },
@@ -198,6 +211,7 @@ async function seedDemoData() {
       endTime: cfg.endTime,
       locationId: location.id,
       type: cfg.type,
+      coverImage: EVENT_PHOTO[cfg.type] ?? EVENT_PHOTO.EVENT,
     };
     const existing = await prisma.event.findFirst({ where: { title: cfg.title } });
     const event = existing
