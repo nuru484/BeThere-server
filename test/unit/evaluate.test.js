@@ -218,4 +218,74 @@ describe("evaluateLiveness", () => {
     expect(v.passed).toBe(false);
     expect(v.reasons).toContain("insufficient_usable_frames");
   });
+
+  // Real-user scenarios that the old fixed thresholds falsely rejected. These
+  // are the cases the recalibration exists to pass.
+
+  it("passes a genuine smile held through the whole burst", () => {
+    // Told to smile, the user smiles from the first frame to the last, so the
+    // happy signal never SPANS a wide range. A turn and a blink still supply the
+    // live-motion proof, so the held smile must not sink the capture.
+    const frames = [
+      frame({ yaw: 18, happy: 0.85 }), // turn, already smiling
+      frame({ ear: 0.12, happy: 0.86 }), // blink low point, still smiling
+      frame({ happy: 0.9 }),
+      frame({ happy: 0.88 }),
+      frame({ happy: 0.87 }),
+      frame({ happy: 0.86 }),
+    ];
+    const v = evaluateLiveness(frames, ENROLLED, ACTIONS, 0.6);
+    expect(v.reasons).toEqual([]);
+    expect(v.passed).toBe(true);
+  });
+
+  it("detects a blink for a narrow-eyed user whose open EAR never reaches 0.285", () => {
+    // Open-eye EAR sits at ~0.24 (narrow eyes / tilted webcam). The old reopen
+    // bar of 0.285 was unreachable, so blink failed on every attempt. Relative
+    // detection reads the dip against this user's own 0.24 baseline.
+    const frames = [
+      frame({ ear: 0.24, yaw: 15 }), // open + a turn
+      frame({ ear: 0.13 }), // blink low point (well under 0.24 baseline)
+      frame({ ear: 0.24, happy: 0.9 }), // reopened + smile
+      frame({ ear: 0.23 }),
+      frame({ ear: 0.24 }),
+      frame({ ear: 0.23 }),
+    ];
+    const v = evaluateLiveness(frames, ENROLLED, ACTIONS, 0.6);
+    expect(v.failedActions).not.toContain("BLINK");
+    expect(v.passed).toBe(true);
+  });
+
+  it("counts a moderate turn (yaw ~13) that the old 18-degree bar rejected", () => {
+    const frames = [
+      frame({ yaw: 1 }), // forward baseline
+      frame({ yaw: 15 }), // a moderate but deliberate turn (old 18 bar rejected)
+      frame({ ear: 0.1 }), // blink
+      frame({ happy: 0.9 }), // smile
+      frame({ yaw: 2 }),
+      frame({ yaw: 1 }),
+    ];
+    const v = evaluateLiveness(frames, ENROLLED, ACTIONS, 0.6);
+    expect(v.failedActions).not.toContain("TURN_LEFT");
+    expect(v.passed).toBe(true);
+  });
+
+  it("still rejects a held photo of a smiling face at a fixed angle", () => {
+    // The relaxations must not open the photo hole: nothing moves, so the blink
+    // has no dip and the turn has no range. Distinct descriptors keep the
+    // duplicate/variation checks from firing, so liveness alone must catch it.
+    const frames = Array.from({ length: 6 }, (_, i) => ({
+      descriptor: near(0.04 + i * 0.0006),
+      yaw: 20,
+      ear: 0.3,
+      happy: 0.9,
+      score: 0.9,
+    }));
+    const v = evaluateLiveness(frames, ENROLLED, ACTIONS, 0.6);
+    expect(v.passed).toBe(false);
+    // No EAR dip -> blink unprovable; no yaw range -> insufficient_motion.
+    expect(v.reasons).toEqual(
+      expect.arrayContaining(["action_not_satisfied", "insufficient_motion"])
+    );
+  });
 });

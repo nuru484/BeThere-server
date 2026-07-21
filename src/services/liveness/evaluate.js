@@ -41,6 +41,39 @@ function hasDuplicateFrames(frames) {
 
 const isTurn = (action) => action === "TURN_LEFT" || action === "TURN_RIGHT";
 
+/** Value at percentile p (0..1) of a numeric list, nearest-rank. */
+function percentile(values, p) {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.min(
+    sorted.length - 1,
+    Math.max(0, Math.round(p * (sorted.length - 1)))
+  );
+  return sorted[index];
+}
+
+/**
+ * The user's own open-eye EAR baseline and the derived closed / reopened
+ * thresholds for THIS burst. Open eyes dominate a capture, so a high percentile
+ * of the per-frame EARs is a robust "eyes open" reference that self-calibrates
+ * to the person and camera (narrow eyes, glasses, tilt) instead of a fixed EAR
+ * that works for some faces and is unreachable for others.
+ */
+function blinkThresholds(frames) {
+  const ears = frames.map((f) => f.ear ?? 0);
+  const openBaseline = percentile(ears, 0.6);
+  // A degenerate baseline (no plausibly-open frame) falls back to the absolute
+  // floor so the closed test still means something.
+  const usableBaseline = openBaseline > LIVENESS.EYE_CLOSED_EAR;
+  const closed = usableBaseline
+    ? openBaseline * LIVENESS.BLINK_CLOSE_RATIO
+    : LIVENESS.EYE_CLOSED_EAR;
+  const reopened = usableBaseline
+    ? openBaseline * LIVENESS.BLINK_REOPEN_RATIO
+    : LIVENESS.EYE_CLOSED_EAR * 1.2;
+  return { closed, reopened };
+}
+
 /** Spread (max - min) of one per-frame signal across the burst. */
 function signalRange(frames, key) {
   let min = Infinity;
@@ -124,19 +157,20 @@ function proveActionsInOrder(frames, actions) {
   let cursor = 0;
   const turnActions = actions.filter(isTurn);
   const isTurnFrame = (f) => Math.abs(f.yaw) >= LIVENESS.YAW_TURN_DEGREES;
+  const { closed: earClosed, reopened: earReopened } = blinkThresholds(frames);
 
   for (const action of actions) {
     if (action === "BLINK") {
       let closedAt = -1;
       for (let i = cursor; i < frames.length; i++) {
-        if (frames[i].ear < LIVENESS.EYE_CLOSED_EAR) {
+        if (frames[i].ear < earClosed) {
           closedAt = i;
           break;
         }
       }
       let openedAt = -1;
       for (let i = closedAt + 1; closedAt !== -1 && i < frames.length; i++) {
-        if (frames[i].ear > LIVENESS.EYE_CLOSED_EAR * 1.5) {
+        if (frames[i].ear > earReopened) {
           openedAt = i;
           break;
         }

@@ -51,12 +51,29 @@ export const LIVENESS = {
   // Frame bounds for one capture upload.
   MIN_FRAMES: 6,
   MAX_FRAMES: 16,
-  // Head-yaw magnitude (degrees) that counts as a deliberate turn.
-  YAW_TURN_DEGREES: 18,
-  // Eye-aspect-ratio below this reads as a closed eye (blink low point).
+  // Head-yaw magnitude (from estimateYaw, ~degrees) that counts as a deliberate
+  // turn. The proxy under-reads moderate turns (both cheek landmarks foreshorten
+  // as the head rotates), and a user turning to a laptop webcam held at arm's
+  // length rarely produces a large asymmetry, so 18 rejected honest turns. 12
+  // (asymmetry ~0.13) still needs a clear, deliberate turn - a forward face sits
+  // near 0 - while accepting the moderate turns real users actually make.
+  YAW_TURN_DEGREES: 12,
+  // Blink is detected RELATIVE to each user's own open-eye baseline, not a fixed
+  // EAR, because open-eye EAR varies widely by face shape, glasses, and camera
+  // angle (narrow eyes / a downward-tilted webcam can sit at 0.22 where a fixed
+  // 0.285 reopen bar could never be cleared, failing blink for that person on
+  // every challenge). A frame under baseline x CLOSE_RATIO is the closed low
+  // point; a later frame back over baseline x REOPEN_RATIO is the reopen. A
+  // photo cannot fake this: a blink is a transition, not a holdable state.
+  BLINK_CLOSE_RATIO: 0.7,
+  BLINK_REOPEN_RATIO: 0.82,
+  // Absolute floor used only when the burst has no plausibly-open baseline (e.g.
+  // degenerate landmarks): a frame under this reads as closed regardless.
   EYE_CLOSED_EAR: 0.19,
-  // Expression-net probability above this reads as a smile.
-  SMILE_PROBABILITY: 0.6,
+  // Expression-net probability above this reads as a smile. face-api scores a
+  // genuine smile 0.8+, so 0.5 comfortably accepts real smiles (including
+  // subtler ones) without admitting a neutral face.
+  SMILE_PROBABILITY: 0.5,
   // A captured-vs-enrolled distance at/under this is a replayed template, not
   // a live face - a real second capture is never a perfect duplicate.
   REPLAY_MIN_DISTANCE: 0.02,
@@ -70,8 +87,16 @@ export const LIVENESS = {
   // grin, a head frozen at an angle) fails even if a single frame clears a
   // threshold. These are the min (max - min) spreads required when the
   // corresponding action is part of the challenge.
-  SMILE_MIN_RANGE: 0.4,
-  EAR_MIN_RANGE: 0.08,
+  //
+  // The SMILE range gate is OFF (0): a user told to smile smiles through the
+  // whole short burst, so happy never spans a range - it is indistinguishable
+  // from a photo by range alone, and rejected honest smiles. Anti-photo strength
+  // does not rest on it: every possible challenge draw (3 of TURN_LEFT/
+  // TURN_RIGHT/BLINK/SMILE) still contains a BLINK or a two-turn reversal, each a
+  // transition no still can fake, and the SMILE itself is still proven per-frame
+  // (happy >= SMILE_PROBABILITY) in challenge order.
+  SMILE_MIN_RANGE: 0,
+  EAR_MIN_RANGE: 0.04,
   // At least this fraction of frames must be mutually distinct (not near-
   // identical), so an attacker cannot pad two real frames with a pile of
   // stills to squeak under the majority-duplicate check.
