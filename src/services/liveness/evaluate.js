@@ -246,19 +246,13 @@ function stepTurnSign(frames) {
  */
 function proveSingleAction(frames, action) {
   if (action === "BLINK") {
-    const { closed, reopened } = blinkThresholds(frames);
-    let closedAt = -1;
-    for (let i = 0; i < frames.length; i++) {
-      if ((frames[i].ear ?? 0) < closed) {
-        closedAt = i;
-        break;
-      }
-    }
-    if (closedAt === -1) return false;
-    for (let i = closedAt + 1; i < frames.length; i++) {
-      if ((frames[i].ear ?? 0) > reopened) return true;
-    }
-    return false;
+    // A blink is a DIP below the user's own open-eye baseline. In a deliberate
+    // single-action capture we only require the closed frame to be present - not
+    // that a reopen frame was also captured strictly after it - because a blink
+    // at the very end of the burst would otherwise be missed, and a photo has no
+    // dip at all (constant EAR), so the dip alone is what a still cannot fake.
+    const { closed } = blinkThresholds(frames);
+    return frames.some((f) => (f.ear ?? 0) < closed);
   }
 
   if (action === "SMILE") {
@@ -266,16 +260,37 @@ function proveSingleAction(frames, action) {
   }
 
   if (isTurn(action)) {
-    // A held photo at an angle has one fixed yaw (range 0); a real turn sweeps
-    // from near-forward to turned, so the excursion - not just the peak - proves
-    // the movement.
+    // A real turn sweeps forward -> turned, so a peak past the turn bar AND some
+    // range prove movement; a held photo at an angle has one fixed yaw (range 0).
+    // The range bar is smaller than the peak because the most-turned frames are
+    // often dropped by the detector, leaving forward + partially-turned frames.
     const turned = frames.some(
       (f) => Math.abs(f.yaw ?? 0) >= LIVENESS.YAW_TURN_DEGREES
     );
-    return turned && signalRange(frames, "yaw") >= LIVENESS.YAW_TURN_DEGREES;
+    return turned && signalRange(frames, "yaw") >= LIVENESS.YAW_STEP_RANGE;
   }
 
   return false;
+}
+
+/**
+ * PII-safe per-step signal aggregates (no descriptors), logged on a step failure
+ * so real webcam output can be seen and the thresholds calibrated against it.
+ */
+function stepSignals(frames) {
+  const round = (n) => Math.round(n * 1000) / 1000;
+  const yaws = frames.map((f) => f.yaw ?? 0);
+  const ears = frames.map((f) => f.ear ?? 0);
+  const happies = frames.map((f) => f.happy ?? 0);
+  return {
+    frames: frames.length,
+    yawMin: round(Math.min(...yaws)),
+    yawMax: round(Math.max(...yaws)),
+    yawRange: round(Math.max(...yaws) - Math.min(...yaws)),
+    earMin: round(Math.min(...ears)),
+    earOpen: round(percentile(ears, 0.7)),
+    happyMax: round(Math.max(...happies)),
+  };
 }
 
 /**
@@ -309,6 +324,9 @@ export function evaluateAction(
       descriptor: null,
       turnSign: null,
       matchDistance: null,
+      // How many frames survived face detection - the diagnostic that matters
+      // for this reason (the rest of the burst had 0 or >1 faces per frame).
+      signals: { usableFrames: frames.length },
     };
   }
 
@@ -372,6 +390,7 @@ export function evaluateAction(
     descriptor: passed ? centre : null,
     turnSign,
     matchDistance,
+    signals: stepSignals(frames),
   };
 }
 

@@ -205,6 +205,13 @@ async function recordStepFailure({
   ip,
   auditAction,
 }) {
+  // PII-safe diagnostics (signal aggregates, no biometrics) so a real-world
+  // false reject can be seen and the thresholds calibrated against actual output.
+  logger.warn(
+    { action, reasons: verdict.reasons, signals: verdict.signals },
+    "Liveness step not satisfied"
+  );
+
   const replaySuspected = verdict.reasons?.includes("replay_suspected") ?? false;
   const evidence = await storeEvidence({
     userId,

@@ -56,7 +56,7 @@ export const LIVENESS = {
   // a single action. Fewer frames than a batch (one action, not three) but
   // sampled fast enough to catch a ~200ms blink.
   MIN_STEP_FRAMES: 4,
-  MAX_STEP_FRAMES: 12,
+  MAX_STEP_FRAMES: 16,
   // Lifetime of a step-by-step challenge. The user performs each action, waits
   // for the server to verify it, then does the next - so the whole flow takes
   // longer than a single batch upload. Presence (the venue code) is re-proven at
@@ -69,7 +69,12 @@ export const LIVENESS = {
   // length rarely produces a large asymmetry, so 18 rejected honest turns. 12
   // (asymmetry ~0.13) still needs a clear, deliberate turn - a forward face sits
   // near 0 - while accepting the moderate turns real users actually make.
-  YAW_TURN_DEGREES: 12,
+  YAW_TURN_DEGREES: 9,
+  // In the step-by-step flow a turn is captured in isolation (forward -> turned),
+  // so the yaw only has to SPAN this much to prove movement - a smaller bar than
+  // the peak, because the strongly-turned frames are often dropped by the face
+  // detector (a profile is harder to detect) and never reach here.
+  YAW_STEP_RANGE: 6,
   // Blink is detected RELATIVE to each user's own open-eye baseline, not a fixed
   // EAR, because open-eye EAR varies widely by face shape, glasses, and camera
   // angle (narrow eyes / a downward-tilted webcam can sit at 0.22 where a fixed
@@ -77,7 +82,7 @@ export const LIVENESS = {
   // every challenge). A frame under baseline x CLOSE_RATIO is the closed low
   // point; a later frame back over baseline x REOPEN_RATIO is the reopen. A
   // photo cannot fake this: a blink is a transition, not a holdable state.
-  BLINK_CLOSE_RATIO: 0.7,
+  BLINK_CLOSE_RATIO: 0.72,
   BLINK_REOPEN_RATIO: 0.82,
   // Absolute floor used only when the burst has no plausibly-open baseline (e.g.
   // degenerate landmarks): a frame under this reads as closed regardless.

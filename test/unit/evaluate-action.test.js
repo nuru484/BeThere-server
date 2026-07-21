@@ -143,6 +143,40 @@ describe("evaluateAction (check-in, identity vs enrolled)", () => {
     expect(v.passed).toBe(false);
     expect(v.reasons).toContain("insufficient_usable_frames");
   });
+
+  it("accepts a blink whose closed frame is the LAST frame (no captured reopen)", () => {
+    // The dip alone proves the blink; requiring a reopen frame strictly after it
+    // used to drop a blink performed at the end of the capture window.
+    const frames = [
+      frame({ ear: 0.3 }),
+      frame({ ear: 0.3 }),
+      frame({ ear: 0.31 }),
+      frame({ ear: 0.11 }), // closed on the final frame
+    ];
+    const v = evaluateAction(frames, "BLINK", {
+      enrolled: ENROLLED,
+      matchThreshold: 0.6,
+    });
+    expect(v.reasons).not.toContain("action_not_satisfied");
+    expect(v.passed).toBe(true);
+  });
+
+  it("reports PII-safe signal aggregates on a failed step (no descriptors)", () => {
+    const frames = [
+      frame({ ear: 0.3 }),
+      frame({ ear: 0.31 }),
+      frame({ ear: 0.3 }),
+      frame({ ear: 0.29 }), // never closes
+    ];
+    const v = evaluateAction(frames, "BLINK", {
+      enrolled: ENROLLED,
+      matchThreshold: 0.6,
+    });
+    expect(v.passed).toBe(false);
+    expect(v.signals).toMatchObject({ frames: 4 });
+    expect(typeof v.signals.earMin).toBe("number");
+    expect(v.signals).not.toHaveProperty("descriptor");
+  });
 });
 
 describe("evaluateAction (enrollment, identity vs reference)", () => {

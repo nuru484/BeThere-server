@@ -73,8 +73,12 @@ export function loadFaceModels() {
   return modelsReady;
 }
 
+// scoreThreshold is deliberately low: during a TURN step the face is angled and
+// the tiny detector's confidence drops, so a 0.5 bar silently dropped exactly
+// the turned frames the step needs (surfacing as insufficient_usable_frames).
+// 0.3 keeps those usable while still rejecting non-faces.
 const detectorOptions = () =>
-  new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.5 });
+  new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.3 });
 
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 

@@ -312,6 +312,12 @@ export async function stepEnrollFaceScan(
   });
 
   if (!verdict.passed || !isFaceDescriptor(verdict.descriptor)) {
+    // PII-safe diagnostics so a real-world false reject during enrollment can be
+    // seen and calibrated (signal aggregates only, never descriptors).
+    logger.warn(
+      { action, reasons: verdict.reasons, signals: verdict.signals },
+      "Enrollment step not satisfied"
+    );
     await recordAudit({
       actorKind: "USER",
       actorId: userId,
