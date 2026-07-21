@@ -56,7 +56,7 @@ export const LIVENESS = {
   // a single action. Fewer frames than a batch (one action, not three) but
   // sampled fast enough to catch a ~200ms blink.
   MIN_STEP_FRAMES: 4,
-  MAX_STEP_FRAMES: 16,
+  MAX_STEP_FRAMES: 20,
   // Lifetime of a step-by-step challenge. The user performs each action, waits
   // for the server to verify it, then does the next - so the whole flow takes
   // longer than a single batch upload. Presence (the venue code) is re-proven at
