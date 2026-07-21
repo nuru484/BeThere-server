@@ -57,6 +57,14 @@ export const LIVENESS = {
   // sampled fast enough to catch a ~200ms blink.
   MIN_STEP_FRAMES: 4,
   MAX_STEP_FRAMES: 20,
+  // Step-by-step performance: the identity descriptor (the heavy face-recognition
+  // net) is computed on only every Nth frame of a step burst - the action
+  // signals (yaw/ear/happy) still come from every frame, so this cuts per-step
+  // ML time sharply without weakening the action proof.
+  STEP_DESCRIPTOR_STRIDE: 3,
+  // At least this many frames in a step must carry an identity descriptor for
+  // the identity checks to be meaningful.
+  MIN_STEP_ID_FRAMES: 2,
   // Lifetime of a step-by-step challenge. The user performs each action, waits
   // for the server to verify it, then does the next - so the whole flow takes
   // longer than a single batch upload. Presence (the venue code) is re-proven at
@@ -94,10 +102,11 @@ export const LIVENESS = {
   // Absolute floor used only when the burst has no plausibly-open baseline (e.g.
   // degenerate landmarks): a frame under this reads as closed regardless.
   EYE_CLOSED_EAR: 0.19,
-  // Expression-net probability above this reads as a smile. face-api scores a
-  // genuine smile 0.8+, so 0.5 comfortably accepts real smiles (including
-  // subtler ones) without admitting a neutral face.
-  SMILE_PROBABILITY: 0.5,
+  // Expression-net probability above this reads as a smile. Real webcam output
+  // showed the net scoring genuine smiles lower than its ideal 0.8+, so the bar
+  // is 0.35 - still well clear of a neutral face (~0.05) but accepting the
+  // subtler smiles the net actually reports.
+  SMILE_PROBABILITY: 0.35,
   // A captured-vs-enrolled distance at/under this is a replayed template, not
   // a live face - a real second capture is never a perfect duplicate.
   REPLAY_MIN_DISTANCE: 0.02,

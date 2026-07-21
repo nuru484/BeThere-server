@@ -123,9 +123,15 @@ async function bufferToCanvas(buffer) {
 /**
  * Analyzes one frame buffer. Returns null when no single clear face is found
  * (a frame with zero or many faces is unusable, not an error). Otherwise
- * returns the descriptor plus the geometric liveness signals for this frame.
+ * returns the geometric liveness signals, and the 128-float identity descriptor
+ * when `withDescriptor` is set.
+ *
+ * The descriptor comes from the face-recognition net - by far the heaviest model
+ * in the pipeline (~6MB vs <1MB for the others) - so skipping it on frames that
+ * are only needed for the action signals (yaw/ear/happy) cuts per-frame cost
+ * dramatically. Identity is still proven from the frames that DO carry one.
  */
-export async function analyzeFrame(buffer) {
+export async function analyzeFrame(buffer, { withDescriptor = true } = {}) {
   await loadFaceModels();
 
   let canvas;
@@ -135,11 +141,11 @@ export async function analyzeFrame(buffer) {
     return null; // Undecodable frame is treated as unusable, not fatal.
   }
 
-  const detection = await faceapi
+  const base = faceapi
     .detectSingleFace(canvas, detectorOptions())
     .withFaceLandmarks()
-    .withFaceExpressions()
-    .withFaceDescriptor();
+    .withFaceExpressions();
+  const detection = withDescriptor ? await base.withFaceDescriptor() : await base;
 
   if (!detection) return null;
 
@@ -149,7 +155,7 @@ export async function analyzeFrame(buffer) {
   const ear = (eyeAspectRatio(leftEye) + eyeAspectRatio(rightEye)) / 2;
 
   return {
-    descriptor: Array.from(detection.descriptor),
+    descriptor: detection.descriptor ? Array.from(detection.descriptor) : null,
     yaw: estimateYaw(points),
     ear,
     happy: detection.expressions?.happy ?? 0,
@@ -161,11 +167,19 @@ export async function analyzeFrame(buffer) {
  * Analyzes many frames, dropping unusable ones. Kept sequential on purpose:
  * concurrent WASM inference contends for the same threads and balloons peak
  * memory for no throughput gain on a check-in-sized batch.
+ *
+ * `descriptorStride` computes the (heavy) identity descriptor on only every Nth
+ * frame - plus always the last one - so the action signals still come from every
+ * frame while identity is sampled across the burst. Stride 1 (the default) keeps
+ * the descriptor on every frame, matching the batch flow.
  */
-export async function analyzeFrames(buffers) {
+export async function analyzeFrames(buffers, { descriptorStride = 1 } = {}) {
   const results = [];
-  for (const buffer of buffers) {
-    const frame = await analyzeFrame(buffer);
+  const last = buffers.length - 1;
+  for (let i = 0; i < buffers.length; i++) {
+    const withDescriptor =
+      descriptorStride <= 1 || i % descriptorStride === 0 || i === last;
+    const frame = await analyzeFrame(buffers[i], { withDescriptor });
     if (frame) results.push(frame);
   }
   return results;

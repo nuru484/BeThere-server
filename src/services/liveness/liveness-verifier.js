@@ -9,6 +9,7 @@
 //     -> { passed, score, matchDistance, reasons, failedActions, replaySuspected, disabled? }
 import crypto from "node:crypto";
 import ENV from "../../config/env.js";
+import { LIVENESS } from "../../config/constants.js";
 import {
   evaluateAction,
   evaluateEnrollment,
@@ -48,7 +49,9 @@ const faceApiVerifier = {
   // template, with the first turn's sign carried in for a reversal check.
   async verifyAction({ frameBuffers, enrolledDescriptor, action, firstTurnSign }) {
     const { analyzeFrames } = await import("../../lib/face-engine.js");
-    const frames = await analyzeFrames(frameBuffers);
+    const frames = await analyzeFrames(frameBuffers, {
+      descriptorStride: LIVENESS.STEP_DESCRIPTOR_STRIDE,
+    });
     return evaluateAction(frames, action, {
       enrolled: enrolledDescriptor,
       firstTurnSign,
@@ -103,7 +106,9 @@ const faceApiEnroller = {
   // descriptor so the caller can accumulate and derive the template at the end.
   async enrollAction({ frameBuffers, action, reference, firstTurnSign }) {
     const { analyzeFrames } = await import("../../lib/face-engine.js");
-    const frames = await analyzeFrames(frameBuffers);
+    const frames = await analyzeFrames(frameBuffers, {
+      descriptorStride: LIVENESS.STEP_DESCRIPTOR_STRIDE,
+    });
     return evaluateAction(frames, action, {
       reference,
       firstTurnSign,

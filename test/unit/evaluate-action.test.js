@@ -198,6 +198,42 @@ describe("evaluateAction (check-in, identity vs enrolled)", () => {
     expect(v.reasons).toContain("action_not_satisfied");
   });
 
+  it("verifies identity on the descriptor subset while proving the action on all frames", () => {
+    // The engine samples the heavy identity descriptor on only some frames; the
+    // rest carry only the action signals (descriptor: null). A turn is proven
+    // from every frame's yaw, identity from the ones that have a descriptor.
+    const withDesc = (over) => ({ ...frame(), ...over });
+    const noDesc = (over) => ({ ...frame(), descriptor: null, ...over });
+    const frames = [
+      withDesc({ yaw: 2 }),
+      noDesc({ yaw: 12 }),
+      noDesc({ yaw: 20 }),
+      withDesc({ yaw: 6 }),
+    ];
+    const v = evaluateAction(frames, "TURN_LEFT", {
+      enrolled: ENROLLED,
+      matchThreshold: 0.6,
+    });
+    expect(v.passed).toBe(true);
+    expect(v.turnSign).toBe(1);
+  });
+
+  it("fails when too few frames carry an identity descriptor", () => {
+    const noDesc = (over) => ({ ...frame(), descriptor: null, ...over });
+    const frames = [
+      { ...frame() }, // one descriptor frame only
+      noDesc({ ear: 0.12 }),
+      noDesc({}),
+      noDesc({}),
+    ];
+    const v = evaluateAction(frames, "BLINK", {
+      enrolled: ENROLLED,
+      matchThreshold: 0.6,
+    });
+    expect(v.passed).toBe(false);
+    expect(v.reasons).toContain("insufficient_usable_frames");
+  });
+
   it("reports PII-safe signal aggregates on a failed step (no descriptors)", () => {
     const frames = [
       frame({ ear: 0.3 }),

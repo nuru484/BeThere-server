@@ -338,15 +338,30 @@ export function evaluateAction(
     };
   }
 
+  // Identity is checked on the frames that carry a descriptor (the heavy net is
+  // sampled across the burst, not run on every frame); the action signals below
+  // use ALL frames. A step with too few descriptor frames cannot be trusted.
+  const idFrames = frames.filter((f) => Array.isArray(f.descriptor));
+  if (idFrames.length < LIVENESS.MIN_STEP_ID_FRAMES) {
+    return {
+      passed: false,
+      reasons: ["insufficient_usable_frames"],
+      descriptor: null,
+      turnSign: null,
+      matchDistance: null,
+      signals: { usableFrames: frames.length, idFrames: idFrames.length },
+    };
+  }
+
   // --- Identity against the enrolled template (check-in only). ---
   let matchDistance = null;
   if (enrolled) {
-    const distances = frames.map((f) =>
+    const distances = idFrames.map((f) =>
       euclideanDistance(f.descriptor, enrolled)
     );
     matchDistance = Math.min(...distances);
     if (matchDistance <= LIVENESS.REPLAY_MIN_DISTANCE) add("replay_suspected");
-    if (distances.filter((d) => d <= matchThreshold).length / frames.length < 0.6) {
+    if (distances.filter((d) => d <= matchThreshold).length / idFrames.length < 0.6) {
       add("identity_mismatch");
     }
     if (distances.some((d) => d > LIVENESS.CONTINUITY_MAX_DISTANCE)) {
@@ -356,10 +371,10 @@ export function evaluateAction(
 
   // --- Identity against the step-0 reference (enrollment continuity). ---
   if (reference) {
-    const distances = frames.map((f) =>
+    const distances = idFrames.map((f) =>
       euclideanDistance(f.descriptor, reference)
     );
-    if (distances.filter((d) => d <= matchThreshold).length / frames.length < 0.6) {
+    if (distances.filter((d) => d <= matchThreshold).length / idFrames.length < 0.6) {
       add("identity_mismatch");
     }
     if (distances.some((d) => d > LIVENESS.CONTINUITY_MAX_DISTANCE)) {
@@ -368,14 +383,14 @@ export function evaluateAction(
   }
 
   // --- One person WITHIN this step (no mid-step swap). ---
-  const centre = frames[medoidIndex(frames)].descriptor;
-  const clustered = frames.filter(
+  const centre = idFrames[medoidIndex(idFrames)].descriptor;
+  const clustered = idFrames.filter(
     (f) => euclideanDistance(f.descriptor, centre) <= matchThreshold
   ).length;
-  if (clustered / frames.length < 0.6) add("inconsistent_identity");
+  if (clustered / idFrames.length < 0.6) add("inconsistent_identity");
 
-  if (hasDuplicateFrames(frames)) add("duplicate_frames");
-  if (distinctRatio(frames) < LIVENESS.MIN_DISTINCT_RATIO) {
+  if (hasDuplicateFrames(idFrames)) add("duplicate_frames");
+  if (distinctRatio(idFrames) < LIVENESS.MIN_DISTINCT_RATIO) {
     add("insufficient_variation");
   }
 
